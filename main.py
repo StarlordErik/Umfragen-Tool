@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import html
-import io
 import json
 import mimetypes
 import os
@@ -12,7 +10,6 @@ import socket
 import sqlite3
 import sys
 import threading
-import time
 import uuid
 import webbrowser
 from dataclasses import dataclass
@@ -26,63 +23,20 @@ from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
-DB_PATH = DATA_DIR / "umfragen.sqlite3"
+DB_PATH = Path(os.environ.get("UMFRAGEN_DB", str(DATA_DIR / "umfragen.sqlite3")))
 CONFIG_PATH = ROOT / "event_config.json"
+DECRYPTION_PATH = ROOT / "decryption.json"
 STATIC_DIR = ROOT / "static"
 COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
 UPDATE_LOCK = threading.Lock()
-
-STOPWORDS = {
-    "aber",
-    "alle",
-    "alles",
-    "als",
-    "auch",
-    "auf",
-    "bei",
-    "bin",
-    "bis",
-    "das",
-    "dem",
-    "den",
-    "der",
-    "die",
-    "ein",
-    "eine",
-    "einem",
-    "einen",
-    "einer",
-    "eines",
-    "eher",
-    "für",
-    "ganz",
-    "hab",
-    "hat",
-    "ich",
-    "im",
-    "ist",
-    "mit",
-    "noch",
-    "oder",
-    "sehr",
-    "so",
-    "und",
-    "vom",
-    "von",
-    "war",
-    "wie",
-    "zu",
-    "zum",
-    "zur",
-}
+OIL_SELECTION_PASSWORD = "Erik"
 
 
 @dataclass
 class Respondent:
     id: int
     token: str
-    display_name: str | None
     ip: str
     user_agent: str
     is_new_cookie: bool
@@ -96,41 +50,80 @@ def slug_lookup(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(item["id"]): item for item in items}
 
 
+def load_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise RuntimeError(f"Datei fehlt: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path.name} muss ein JSON-Objekt enthalten.")
+    return payload
+
+
 def load_config() -> dict[str, Any]:
-    if not CONFIG_PATH.exists():
-        raise RuntimeError(f"Konfigurationsdatei fehlt: {CONFIG_PATH}")
-    with CONFIG_PATH.open("r", encoding="utf-8") as handle:
-        config = json.load(handle)
+    config = load_json_file(CONFIG_PATH)
     validate_config(config)
     return config
+
+
+def load_decryption(config: dict[str, Any]) -> dict[str, Any]:
+    decryption = load_json_file(DECRYPTION_PATH)
+    validate_decryption(config, decryption)
+    return decryption
 
 
 def validate_config(config: dict[str, Any]) -> None:
     if not isinstance(config.get("surveys"), list) or not config["surveys"]:
         raise ValueError("event_config.json braucht mindestens eine Umfrage in 'surveys'.")
-    if not isinstance(config.get("oils"), list) or not config["oils"]:
-        raise ValueError("event_config.json braucht mindestens ein Öl in 'oils'.")
-
-    oil_ids = {oil.get("id") for oil in config["oils"]}
-    if len(oil_ids) != len(config["oils"]):
-        raise ValueError("Öl-IDs in event_config.json müssen eindeutig sein.")
+    if not isinstance(config.get("oil_type_options"), list) or not config["oil_type_options"]:
+        raise ValueError("event_config.json braucht 'oil_type_options'.")
 
     survey_ids: set[str] = set()
     for survey in config["surveys"]:
         survey_id = survey.get("id")
         if not survey_id or survey_id in survey_ids:
-            raise ValueError("Umfrage-IDs in event_config.json müssen gesetzt und eindeutig sein.")
+            raise ValueError("Umfrage-IDs müssen gesetzt und eindeutig sein.")
         survey_ids.add(survey_id)
+        if not survey.get("cipher_set"):
+            raise ValueError(f"Umfrage '{survey_id}' braucht ein cipher_set.")
 
-        ciphers: set[str] = set()
-        for sample in survey.get("samples", []):
-            cipher = sample.get("cipher")
-            oil_id = sample.get("oil_id")
-            if not cipher or cipher in ciphers:
-                raise ValueError(f"Chiffren in Umfrage '{survey_id}' müssen eindeutig sein.")
-            if oil_id not in oil_ids:
-                raise ValueError(f"Unbekannte oil_id '{oil_id}' in Umfrage '{survey_id}'.")
-            ciphers.add(cipher)
+        field_ids: set[str] = set()
+        for field in survey.get("fields", []):
+            field_id = field.get("id")
+            if not field_id or field_id in field_ids:
+                raise ValueError(f"Felder in Umfrage '{survey_id}' brauchen eindeutige IDs.")
+            field_ids.add(field_id)
+
+
+def validate_decryption(config: dict[str, Any], decryption: dict[str, Any]) -> None:
+    oils = decryption.get("oils")
+    cipher_sets = decryption.get("cipher_sets")
+    if not isinstance(oils, list) or len(oils) != 24:
+        raise ValueError("decryption.json braucht genau 24 Öl-/Platzhalter-Einträge.")
+    if not isinstance(cipher_sets, dict):
+        raise ValueError("decryption.json braucht 'cipher_sets'.")
+
+    oil_ids = {oil.get("id") for oil in oils}
+    if len(oil_ids) != len(oils):
+        raise ValueError("IDs in decryption.json müssen eindeutig sein.")
+
+    for survey in config["surveys"]:
+        survey_id = survey["id"]
+        cipher_set = survey["cipher_set"]
+        allowed = cipher_sets.get(cipher_set)
+        if not isinstance(allowed, list) or len(allowed) != 24:
+            raise ValueError(f"cipher_set '{cipher_set}' braucht 24 Einträge.")
+
+        seen: set[str] = set()
+        for oil in oils:
+            cipher = oil.get("ciphers", {}).get(survey_id)
+            if not cipher:
+                raise ValueError(f"Öl '{oil.get('id')}' braucht eine Chiffre für '{survey_id}'.")
+            if cipher not in allowed:
+                raise ValueError(f"Chiffre '{cipher}' ist nicht im cipher_set '{cipher_set}'.")
+            if cipher in seen:
+                raise ValueError(f"Chiffre '{cipher}' ist in '{survey_id}' doppelt vergeben.")
+            seen.add(cipher)
 
 
 def save_config(config: dict[str, Any]) -> None:
@@ -140,8 +133,224 @@ def save_config(config: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def save_decryption(config: dict[str, Any], decryption: dict[str, Any]) -> None:
+    validate_decryption(config, decryption)
+    with DECRYPTION_PATH.open("w", encoding="utf-8") as handle:
+        json.dump(decryption, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
+def active_oils(decryption: dict[str, Any]) -> list[dict[str, Any]]:
+    return [oil for oil in decryption["oils"] if oil.get("implemented") is True]
+
+
+def survey_by_id(config: dict[str, Any], survey_id: str) -> dict[str, Any] | None:
+    return next((survey for survey in config["surveys"] if survey["id"] == survey_id), None)
+
+
+def survey_samples(config: dict[str, Any], decryption: dict[str, Any], survey: dict[str, Any]) -> list[dict[str, str]]:
+    order = decryption["cipher_sets"][survey["cipher_set"]]
+    order_index = {cipher: index for index, cipher in enumerate(order)}
+    samples = [
+        {"cipher": oil["ciphers"][survey["id"]]}
+        for oil in active_oils(decryption)
+        if oil.get("ciphers", {}).get(survey["id"])
+    ]
+    return sorted(samples, key=lambda item: order_index.get(item["cipher"], 999))
+
+
+def public_runtime_config(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    surveys = []
+    for survey in config["surveys"]:
+        item = dict(survey)
+        item["samples"] = survey_samples(config, decryption, survey)
+        surveys.append(item)
+    return {
+        "event": config.get("event", {}),
+        "oil_type_options": config.get("oil_type_options", []),
+        "surveys": surveys,
+    }
+
+
+def cipher_to_oil(config: dict[str, Any], decryption: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for oil in active_oils(decryption):
+        for survey in config["surveys"]:
+            cipher = oil.get("ciphers", {}).get(survey["id"])
+            if cipher:
+                lookup[(survey["id"], cipher)] = oil
+    return lookup
+
+
+def all_cipher_to_oil(config: dict[str, Any], decryption: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for oil in decryption["oils"]:
+        for survey in config["surveys"]:
+            cipher = oil.get("ciphers", {}).get(survey["id"])
+            if cipher:
+                lookup[(survey["id"], cipher)] = oil
+    return lookup
+
+
+def oil_response_counts(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, int]:
+    lookup = all_cipher_to_oil(config, decryption)
+    counts = {oil["id"]: 0 for oil in decryption["oils"]}
+    with connect_db() as db:
+        rows = db.execute("SELECT survey_id, cipher, COUNT(*) AS count FROM survey_responses GROUP BY survey_id, cipher").fetchall()
+    for row in rows:
+        oil = lookup.get((row["survey_id"], row["cipher"]))
+        if oil:
+            counts[oil["id"]] = counts.get(oil["id"], 0) + int(row["count"])
+    return counts
+
+
+def oil_selection_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    counts = oil_response_counts(config, decryption)
+    oils = []
+    for oil in decryption["oils"]:
+        count = counts.get(oil["id"], 0)
+        oils.append(
+            {
+                "id": oil["id"],
+                "name": oil.get("name", ""),
+                "type": oil.get("type", ""),
+                "implemented": bool(oil.get("implemented")),
+                "baseline": bool(oil.get("baseline")),
+                "ciphers": oil.get("ciphers", {}),
+                "response_count": count,
+                "can_remove": bool(oil.get("implemented")) and count == 0,
+            }
+        )
+    return {
+        "ok": True,
+        "oils": oils,
+        "active_count": sum(1 for oil in oils if oil["implemented"]),
+        "placeholder_count": sum(1 for oil in oils if not oil["implemented"]),
+        "oil_type_options": config.get("oil_type_options", []),
+    }
+
+
+def slugify(value: str) -> str:
+    normalized = value.casefold()
+    replacements = {
+        "ä": "ae",
+        "ö": "oe",
+        "ü": "ue",
+        "ß": "ss",
+        "ł": "l",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized).strip("-")
+    return slug or "oel"
+
+
+def unique_oil_id(base: str, decryption: dict[str, Any]) -> str:
+    existing = {oil["id"] for oil in decryption["oils"]}
+    candidate = slugify(base)
+    if candidate not in existing:
+        return candidate
+    suffix = 2
+    while f"{candidate}-{suffix}" in existing:
+        suffix += 1
+    return f"{candidate}-{suffix}"
+
+
+def add_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name", "")).strip()
+    oil_type = str(payload.get("type", "")).strip()
+    if not name:
+        raise ValueError("Ölname fehlt.")
+    if oil_type not in config.get("oil_type_options", []):
+        raise ValueError("Öl-Sorte ist nicht erlaubt.")
+
+    slot = next((oil for oil in decryption["oils"] if not oil.get("implemented")), None)
+    if slot is None:
+        raise ValueError("Es gibt keinen ungenutzten Platzhalter mehr.")
+
+    ciphers = slot.get("ciphers", {})
+    new_id = unique_oil_id(name, decryption)
+    slot.clear()
+    slot.update(
+        {
+            "id": new_id,
+            "name": name[:160],
+            "type": oil_type,
+            "implemented": True,
+            "ciphers": ciphers,
+        }
+    )
+    save_decryption(config, decryption)
+    return oil_selection_payload(config, decryption)
+
+
+def placeholder_id_for(index: int, decryption: dict[str, Any]) -> str:
+    existing = {oil["id"] for oil in decryption["oils"]}
+    candidate = f"platzhalter-frei-{index + 1:02d}"
+    if candidate not in existing:
+        return candidate
+    suffix = 2
+    while f"{candidate}-{suffix}" in existing:
+        suffix += 1
+    return f"{candidate}-{suffix}"
+
+
+def remove_oil(config: dict[str, Any], decryption: dict[str, Any], oil_id: str) -> dict[str, Any]:
+    counts = oil_response_counts(config, decryption)
+    if counts.get(oil_id, 0):
+        raise ValueError("Dieses Öl hat bereits Wertungen und kann nicht entfernt werden.")
+    for index, oil in enumerate(decryption["oils"]):
+        if oil["id"] == oil_id and oil.get("implemented"):
+            ciphers = oil.get("ciphers", {})
+            placeholder_id = placeholder_id_for(index, decryption)
+            oil.clear()
+            oil.update(
+                {
+                    "id": placeholder_id,
+                    "name": f"Platzhalter frei {index + 1:02d}",
+                    "type": "Platzhalter",
+                    "implemented": False,
+                    "ciphers": ciphers,
+                }
+            )
+            save_decryption(config, decryption)
+            return oil_selection_payload(config, decryption)
+    raise ValueError("Öl nicht gefunden.")
+
+
+def delete_oil_responses(config: dict[str, Any], decryption: dict[str, Any], oil_id: str) -> dict[str, Any]:
+    oil = next((item for item in decryption["oils"] if item["id"] == oil_id), None)
+    if not oil:
+        raise ValueError("Öl nicht gefunden.")
+
+    pairs = [(survey["id"], oil.get("ciphers", {}).get(survey["id"])) for survey in config["surveys"]]
+    with UPDATE_LOCK, connect_db() as db:
+        for survey_id, cipher in pairs:
+            if cipher:
+                db.execute("DELETE FROM survey_responses WHERE survey_id = ? AND cipher = ?", (survey_id, cipher))
+        db.execute(
+            """
+            DELETE FROM respondents
+            WHERE id NOT IN (SELECT DISTINCT respondent_id FROM survey_responses)
+            """
+        )
+    return oil_selection_payload(config, decryption)
+
+
+def reset_database() -> dict[str, Any]:
+    with UPDATE_LOCK, connect_db() as db:
+        db.execute("DELETE FROM survey_responses")
+        db.execute("DELETE FROM respondents")
+    return {"ok": True, "updated_at": now_iso()}
+
+
+def require_oil_password(value: Any) -> None:
+    if value != OIL_SELECTION_PASSWORD:
+        raise ValueError("Passwort ist falsch.")
+
+
 def connect_db() -> sqlite3.Connection:
-    DATA_DIR.mkdir(exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
@@ -209,10 +418,7 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
         row = None
         is_new_cookie = False
         if token:
-            row = db.execute(
-                "SELECT * FROM respondents WHERE token = ?",
-                (token,),
-            ).fetchone()
+            row = db.execute("SELECT * FROM respondents WHERE token = ?", (token,)).fetchone()
 
         if row is None:
             row = db.execute(
@@ -237,29 +443,18 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
                 """,
                 (token, ip, user_agent, timestamp, timestamp),
             )
-            row = db.execute(
-                "SELECT * FROM respondents WHERE token = ?",
-                (token,),
-            ).fetchone()
+            row = db.execute("SELECT * FROM respondents WHERE token = ?", (token,)).fetchone()
             is_new_cookie = True
         else:
             db.execute(
-                """
-                UPDATE respondents
-                SET ip = ?, user_agent = ?, updated_at = ?
-                WHERE id = ?
-                """,
+                "UPDATE respondents SET ip = ?, user_agent = ?, updated_at = ? WHERE id = ?",
                 (ip, user_agent, timestamp, row["id"]),
             )
-            row = db.execute(
-                "SELECT * FROM respondents WHERE id = ?",
-                (row["id"],),
-            ).fetchone()
+            row = db.execute("SELECT * FROM respondents WHERE id = ?", (row["id"],)).fetchone()
 
     return Respondent(
         id=int(row["id"]),
         token=str(row["token"]),
-        display_name=row["display_name"],
         ip=str(row["ip"]),
         user_agent=str(row["user_agent"]),
         is_new_cookie=is_new_cookie,
@@ -312,14 +507,6 @@ def send_html(
     send_bytes(handler, status, markup.encode("utf-8"), "text/html; charset=utf-8", extra_headers)
 
 
-def error_response(handler: BaseHTTPRequestHandler, status: int, message: str) -> None:
-    wants_json = handler.path.startswith("/api/") or "application/json" in handler.headers.get("Accept", "")
-    if wants_json:
-        send_json(handler, status, {"ok": False, "error": message})
-    else:
-        send_html(handler, status, page_shell("Fehler", f"<main class='page narrow'><h1>{html.escape(message)}</h1></main>"))
-
-
 def page_shell(title: str, body: str, scripts: str = "", head_extra: str = "") -> str:
     escaped_title = html.escape(title)
     return f"""<!doctype html>
@@ -339,104 +526,12 @@ def page_shell(title: str, body: str, scripts: str = "", head_extra: str = "") -
 </html>"""
 
 
-def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any]) -> str:
-    port = handler.server.server_address[1]
-    host_header = handler.headers.get("Host", f"localhost:{port}")
-    current_origin = f"http://{host_header}"
-    lan_origins = local_origins(port)
-    preferred_origin = next((origin for origin in lan_origins if "127.0.0.1" not in origin and "localhost" not in origin), current_origin)
-
-    survey_cards = []
-    for survey in config["surveys"]:
-        href = f"/umfrage/{survey['id']}"
-        external_href = f"{preferred_origin}{href}"
-        survey_cards.append(
-            f"""
-            <article class="link-card" style="--accent:{html.escape(survey.get('accent', '#277c61'))}">
-              <div>
-                <p class="eyebrow">{html.escape(survey.get('method', 'Umfrage'))}</p>
-                <h2>{html.escape(survey.get('title', survey['id']))}</h2>
-              </div>
-              <a class="primary-link" href="{html.escape(href)}">Öffnen</a>
-              <code>{html.escape(external_href)}</code>
-            </article>
-            """
-        )
-
-    origins_markup = "".join(f"<code>{html.escape(origin)}</code>" for origin in lan_origins)
-    event_title = config.get("event", {}).get("title", "Ölverkostung")
-    return page_shell(
-        event_title,
-        f"""
-        <main class="page">
-          <section class="topbar">
-            <div>
-              <p class="eyebrow">Lokale Umfragen</p>
-              <h1>{html.escape(event_title)}</h1>
-            </div>
-            <div class="topbar-actions">
-              <a class="ghost-button" href="/admin">Setup</a>
-              <a class="primary-link" href="/ergebnisse">Ergebnisse</a>
-            </div>
-          </section>
-
-          <section class="link-grid">
-            {''.join(survey_cards)}
-          </section>
-
-          <section class="panel">
-            <h2>Netzwerk-Adressen</h2>
-            <div class="address-list">{origins_markup}</div>
-          </section>
-        </main>
-        """,
-    )
-
-
-def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
-    survey = next((item for item in config["surveys"] if item["id"] == survey_id), None)
-    if not survey:
-        return page_shell("Nicht gefunden", "<main class='page narrow'><h1>Diese Umfrage gibt es nicht.</h1></main>")
-
-    title = f"{survey.get('short_title', survey.get('title', survey_id))} · {config.get('event', {}).get('title', 'Ölverkostung')}"
-    return page_shell(
-        title,
-        """
-        <main id="survey-app" class="page survey-page">
-          <div class="loading-panel">Umfrage wird geladen...</div>
-        </main>
-        """,
-        f"""
-        <script>window.SURVEY_ID = {json.dumps(survey_id)};</script>
-        <script src="/static/survey.js" defer></script>
-        """,
-    )
-
-
-def render_results_page(config: dict[str, Any]) -> str:
-    title = f"Ergebnisse · {config.get('event', {}).get('title', 'Ölverkostung')}"
-    return page_shell(
-        title,
-        """
-        <main id="results-app" class="page results-page">
-          <div class="loading-panel">Ergebnisse werden geladen...</div>
-        </main>
-        """,
-        '<script src="/static/results.js" defer></script>',
-    )
-
-
-def render_admin_page(config: dict[str, Any]) -> str:
-    title = f"Setup · {config.get('event', {}).get('title', 'Ölverkostung')}"
-    return page_shell(
-        title,
-        """
-        <main id="admin-app" class="page admin-page">
-          <div class="loading-panel">Setup wird geladen...</div>
-        </main>
-        """,
-        '<script src="/static/admin.js" defer></script>',
-    )
+def error_response(handler: BaseHTTPRequestHandler, status: int, message: str) -> None:
+    wants_json = handler.path.startswith("/api/") or "application/json" in handler.headers.get("Accept", "")
+    if wants_json:
+        send_json(handler, status, {"ok": False, "error": message})
+    else:
+        send_html(handler, status, page_shell("Fehler", f"<main class='page narrow'><h1>{html.escape(message)}</h1></main>"))
 
 
 def local_origins(port: int) -> list[str]:
@@ -457,16 +552,120 @@ def local_origins(port: int) -> list[str]:
     except OSError:
         pass
 
-    ordered = sorted(hosts, key=lambda value: (value in {"localhost", "127.0.0.1"}, value))
+    ordered = sorted(hosts, key=host_score)
     return [f"http://{host}:{port}" for host in ordered]
 
 
-def survey_by_id(config: dict[str, Any], survey_id: str) -> dict[str, Any] | None:
-    return next((survey for survey in config["surveys"] if survey["id"] == survey_id), None)
+def host_score(host: str) -> tuple[int, str]:
+    if host.startswith("192.168."):
+        return (0, host)
+    if host.startswith("10."):
+        return (1, host)
+    if re.match(r"^172\.(1[6-9]|2[0-9]|3[0-1])\.", host):
+        return (2, host)
+    if host not in {"localhost", "127.0.0.1"} and not re.match(r"^\d+\.\d+\.\d+\.\d+$", host):
+        return (3, host)
+    if host not in {"localhost", "127.0.0.1"}:
+        return (4, host)
+    return (5, host)
 
 
-def bootstrap_payload(config: dict[str, Any], respondent: Respondent, survey_id: str) -> dict[str, Any]:
+def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decryption: dict[str, Any]) -> str:
+    port = handler.server.server_address[1]
+    host_header = handler.headers.get("Host", f"localhost:{port}")
+    current_origin = f"http://{host_header}"
+    lan_origins = local_origins(port)
+    preferred_origin = lan_origins[0] if lan_origins else current_origin
+
+    survey_cards = []
+    for survey in public_runtime_config(config, decryption)["surveys"]:
+        href = f"/umfrage/{survey['id']}"
+        external_href = f"{preferred_origin}{href}"
+        survey_cards.append(
+            f"""
+            <article class="link-card" style="--accent:{html.escape(survey.get('accent', '#277c61'))}">
+              <div>
+                <p class="eyebrow">{html.escape(survey.get('short_title', 'Testreihe'))}</p>
+                <h2>{html.escape(survey.get('title', survey['id']))}</h2>
+              </div>
+              <a class="primary-link" href="{html.escape(href)}">Öffnen</a>
+              <code>{html.escape(external_href)}</code>
+            </article>
+            """
+        )
+
+    return page_shell(
+        "Linktree zum Oliven-Symposium",
+        f"""
+        <main class="page">
+          <section class="topbar">
+            <div>
+              <p class="eyebrow">{html.escape(config.get('event', {}).get('title', 'Oliven-Symposium'))}</p>
+              <h1>Linktree zum Oliven-Symposium</h1>
+            </div>
+            <div class="topbar-actions">
+              <a class="ghost-button" href="/oel-auswahl">Öl-Auswahl</a>
+              <a class="primary-link" href="/ergebnisse">Ergebnisse</a>
+            </div>
+          </section>
+
+          <section class="link-grid">
+            {''.join(survey_cards)}
+          </section>
+        </main>
+        """,
+    )
+
+
+def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
     survey = survey_by_id(config, survey_id)
+    if not survey:
+        return page_shell("Nicht gefunden", "<main class='page narrow'><h1>Diese Umfrage gibt es nicht.</h1></main>")
+
+    title = f"{survey.get('short_title', survey.get('title', survey_id))} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
+    return page_shell(
+        title,
+        """
+        <main id="survey-app" class="page survey-page">
+          <div class="loading-panel">Umfrage wird geladen...</div>
+        </main>
+        """,
+        f"""
+        <script>window.SURVEY_ID = {json.dumps(survey_id)};</script>
+        <script src="/static/survey.js" defer></script>
+        """,
+    )
+
+
+def render_results_page(config: dict[str, Any]) -> str:
+    title = f"Ergebnisse · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
+    return page_shell(
+        title,
+        """
+        <main id="results-app" class="page results-page">
+          <div class="loading-panel">Ergebnisse werden geladen...</div>
+        </main>
+        """,
+        '<script src="/static/results.js" defer></script>',
+    )
+
+
+def render_oil_selection_page(config: dict[str, Any]) -> str:
+    title = f"Öl-Auswahl · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
+    return page_shell(
+        title,
+        """
+        <main id="oil-selection-app" class="page oil-selection-page">
+          <div class="loading-panel">Öl-Auswahl wird geladen...</div>
+        </main>
+        """,
+        '<script src="/static/oils.js" defer></script>',
+    )
+
+
+def bootstrap_payload(config: dict[str, Any], decryption: dict[str, Any], respondent: Respondent, survey_id: str) -> dict[str, Any]:
+    runtime_config = public_runtime_config(config, decryption)
+    survey = survey_by_id(runtime_config, survey_id)
     if survey is None:
         raise ValueError("Unbekannte Umfrage.")
 
@@ -488,31 +687,42 @@ def bootstrap_payload(config: dict[str, Any], respondent: Respondent, survey_id:
         for row in rows
     }
 
-    public_config = {
-        "event": config.get("event", {}),
-        "oil_type_options": config.get("oil_type_options", []),
-        "surveys": config.get("surveys", []),
-    }
     return {
         "ok": True,
-        "config": public_config,
+        "config": runtime_config,
         "survey": survey,
-        "respondent": {
-            "display_name": respondent.display_name,
-            "ip": respondent.ip,
-        },
+        "respondent": {"anonymous": True},
         "responses": responses,
         "server_time": now_iso(),
     }
 
 
-def upsert_response(config: dict[str, Any], respondent: Respondent, payload: dict[str, Any]) -> dict[str, Any]:
+def sanitize_answer(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return value.strip()[:2000]
+    if isinstance(value, list):
+        return [sanitize_answer(item) for item in value[:50]]
+    return str(value)[:2000]
+
+
+def upsert_response(
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+    respondent: Respondent,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     survey_id = str(payload.get("survey_id", ""))
     cipher = str(payload.get("cipher", ""))
     answers = payload.get("answers")
-    display_name = payload.get("display_name")
 
-    survey = survey_by_id(config, survey_id)
+    runtime_config = public_runtime_config(config, decryption)
+    survey = survey_by_id(runtime_config, survey_id)
     if survey is None:
         raise ValueError("Unbekannte Umfrage.")
 
@@ -526,19 +736,15 @@ def upsert_response(config: dict[str, Any], respondent: Respondent, payload: dic
     field_ids = {field["id"] for field in survey.get("fields", [])}
     sanitized_answers: dict[str, Any] = {}
     for key, value in answers.items():
-        if key not in field_ids:
-            continue
-        sanitized_answers[key] = sanitize_answer(value)
+        if key in field_ids:
+            sanitized_answers[key] = sanitize_answer(value)
 
     timestamp = now_iso()
     with UPDATE_LOCK, connect_db() as db:
-        if isinstance(display_name, str):
-            name = display_name.strip()[:80] or None
-            db.execute(
-                "UPDATE respondents SET display_name = ?, updated_at = ? WHERE id = ?",
-                (name, timestamp, respondent.id),
-            )
-
+        db.execute(
+            "UPDATE respondents SET ip = ?, user_agent = ?, updated_at = ? WHERE id = ?",
+            (respondent.ip, respondent.user_agent, timestamp, respondent.id),
+        )
         db.execute(
             """
             INSERT INTO survey_responses (
@@ -561,250 +767,6 @@ def upsert_response(config: dict[str, Any], respondent: Respondent, payload: dic
     return {"ok": True, "updated_at": timestamp}
 
 
-def update_respondent(respondent: Respondent, payload: dict[str, Any]) -> dict[str, Any]:
-    name = payload.get("display_name")
-    if not isinstance(name, str):
-        raise ValueError("Name fehlt.")
-    timestamp = now_iso()
-    clean_name = name.strip()[:80] or None
-    with UPDATE_LOCK, connect_db() as db:
-        db.execute(
-            "UPDATE respondents SET display_name = ?, updated_at = ? WHERE id = ?",
-            (clean_name, timestamp, respondent.id),
-        )
-    return {"ok": True, "display_name": clean_name, "updated_at": timestamp}
-
-
-def sanitize_answer(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value
-    if isinstance(value, str):
-        return value.strip()[:2000]
-    if isinstance(value, list):
-        return [sanitize_answer(item) for item in value[:50]]
-    return str(value)[:2000]
-
-
-def result_payload(config: dict[str, Any]) -> dict[str, Any]:
-    oils = slug_lookup(config["oils"])
-    oil_order = [oil["id"] for oil in config["oils"]]
-    survey_order = [survey["id"] for survey in config["surveys"]]
-    survey_lookup = slug_lookup(config["surveys"])
-    field_lookup = {
-        survey["id"]: {field["id"]: field for field in survey.get("fields", [])}
-        for survey in config["surveys"]
-    }
-    sample_lookup = {
-        survey["id"]: {sample["cipher"]: sample for sample in survey.get("samples", [])}
-        for survey in config["surveys"]
-    }
-
-    with connect_db() as db:
-        respondent_rows = db.execute(
-            "SELECT * FROM respondents ORDER BY updated_at DESC"
-        ).fetchall()
-        response_rows = db.execute(
-            """
-            SELECT sr.*, r.display_name, r.ip
-            FROM survey_responses sr
-            JOIN respondents r ON r.id = sr.respondent_id
-            ORDER BY sr.updated_at DESC
-            """
-        ).fetchall()
-
-    respondents = [
-        {
-            "id": row["id"],
-            "display_name": row["display_name"] or f"Gast {row['id']}",
-            "ip": row["ip"],
-            "updated_at": row["updated_at"],
-        }
-        for row in respondent_rows
-    ]
-
-    metric_stats: dict[str, dict[str, dict[str, Any]]] = {}
-    oil_stats = {
-        oil_id: {
-            "oil": oils[oil_id],
-            "response_count": 0,
-            "guess_correct": 0,
-            "guess_total": 0,
-            "metrics": {},
-        }
-        for oil_id in oil_order
-    }
-    survey_completion: dict[str, dict[str, int]] = {
-        survey_id: {sample["cipher"]: 0 for sample in survey_lookup[survey_id].get("samples", [])}
-        for survey_id in survey_order
-    }
-    word_counts: dict[str, int] = {}
-    recent_entries = []
-
-    for row in response_rows:
-        survey_id = row["survey_id"]
-        cipher = row["cipher"]
-        survey = survey_lookup.get(survey_id)
-        sample = sample_lookup.get(survey_id, {}).get(cipher)
-        if not survey or not sample:
-            continue
-
-        oil_id = sample["oil_id"]
-        oil = oils[oil_id]
-        try:
-            answers = json.loads(row["answers_json"])
-        except json.JSONDecodeError:
-            answers = {}
-
-        oil_stats[oil_id]["response_count"] += 1
-        survey_completion.setdefault(survey_id, {}).setdefault(cipher, 0)
-        survey_completion[survey_id][cipher] += 1
-
-        recent_entries.append(
-            {
-                "survey_id": survey_id,
-                "survey_title": survey.get("short_title", survey.get("title", survey_id)),
-                "cipher": cipher,
-                "oil_name": oil["name"],
-                "respondent": row["display_name"] or f"Gast {row['respondent_id']}",
-                "ip": row["ip"],
-                "updated_at": row["updated_at"],
-                "answers": answers,
-            }
-        )
-
-        for field_id, value in answers.items():
-            field = field_lookup.get(survey_id, {}).get(field_id)
-            if not field:
-                continue
-
-            if field_id == "oil_guess" and value:
-                oil_stats[oil_id]["guess_total"] += 1
-                if normalize_oil_type(value) == normalize_oil_type(oil.get("type", "")):
-                    oil_stats[oil_id]["guess_correct"] += 1
-
-            if field.get("kind") in {"rating", "range"}:
-                numeric_value = as_float(value)
-                if numeric_value is not None:
-                    metric_key = field.get("metric_key", field_id)
-                    metric_label = field.get("summary_label", field.get("label", field_id))
-                    metric_stats.setdefault(metric_key, {"label": metric_label, "oils": {}})
-                    metric_stats[metric_key]["oils"].setdefault(
-                        oil_id,
-                        {"sum": 0.0, "count": 0, "min": field.get("min"), "max": field.get("max")},
-                    )
-                    metric_stats[metric_key]["oils"][oil_id]["sum"] += numeric_value
-                    metric_stats[metric_key]["oils"][oil_id]["count"] += 1
-
-                    oil_stats[oil_id]["metrics"].setdefault(
-                        metric_key,
-                        {"label": metric_label, "sum": 0.0, "count": 0, "min": field.get("min"), "max": field.get("max")},
-                    )
-                    oil_stats[oil_id]["metrics"][metric_key]["sum"] += numeric_value
-                    oil_stats[oil_id]["metrics"][metric_key]["count"] += 1
-
-            if field.get("kind") == "textarea" or field_id in {"aroma_profile", "notes"}:
-                for word in extract_words(str(value)):
-                    word_counts[word] = word_counts.get(word, 0) + 1
-
-    metrics = []
-    metric_order = config.get(
-        "result_metric_order",
-        ["overall", "bitter", "sharp", "aroma_intensity", "fruity", "nutty", "harmony", "favorite"],
-    )
-    sorted_keys = sorted(
-        metric_stats,
-        key=lambda key: (metric_order.index(key) if key in metric_order else 999, key),
-    )
-    for metric_key in sorted_keys:
-        item = metric_stats[metric_key]
-        oils_payload = {}
-        for oil_id in oil_order:
-            stat = item["oils"].get(oil_id)
-            if stat and stat["count"]:
-                oils_payload[oil_id] = {
-                    "avg": round(stat["sum"] / stat["count"], 2),
-                    "sum": round(stat["sum"], 2),
-                    "count": stat["count"],
-                    "min": stat.get("min"),
-                    "max": stat.get("max"),
-                }
-            else:
-                oils_payload[oil_id] = None
-        metrics.append({"key": metric_key, "label": item["label"], "oils": oils_payload})
-
-    oil_payload = []
-    for oil_id in oil_order:
-        stat = oil_stats[oil_id]
-        metric_payload = {}
-        for metric_key, metric in stat["metrics"].items():
-            metric_payload[metric_key] = {
-                "label": metric["label"],
-                "avg": round(metric["sum"] / metric["count"], 2) if metric["count"] else None,
-                "sum": round(metric["sum"], 2),
-                "count": metric["count"],
-                "min": metric.get("min"),
-                "max": metric.get("max"),
-            }
-        total = stat["guess_total"]
-        oil_payload.append(
-            {
-                "id": oil_id,
-                "name": stat["oil"]["name"],
-                "type": stat["oil"].get("type", ""),
-                "baseline": bool(stat["oil"].get("baseline")),
-                "response_count": stat["response_count"],
-                "guess_correct": stat["guess_correct"],
-                "guess_total": total,
-                "guess_accuracy": round(stat["guess_correct"] / total, 3) if total else None,
-                "metrics": metric_payload,
-            }
-        )
-
-    total_guesses = sum(item["guess_total"] for item in oil_stats.values())
-    correct_guesses = sum(item["guess_correct"] for item in oil_stats.values())
-    total_samples = sum(len(survey.get("samples", [])) for survey in config["surveys"])
-    expected_responses = len(respondents) * total_samples if respondents else 0
-
-    word_cloud = [
-        {"word": word, "count": count}
-        for word, count in sorted(word_counts.items(), key=lambda item: (-item[1], item[0]))[:80]
-    ]
-
-    return {
-        "ok": True,
-        "config": {
-            "event": config.get("event", {}),
-            "surveys": config.get("surveys", []),
-            "oils": config.get("oils", []),
-        },
-        "summary": {
-            "respondent_count": len(respondents),
-            "response_count": len(response_rows),
-            "expected_responses": expected_responses,
-            "completion_ratio": round(len(response_rows) / expected_responses, 3) if expected_responses else None,
-            "guess_accuracy": round(correct_guesses / total_guesses, 3) if total_guesses else None,
-            "guess_correct": correct_guesses,
-            "guess_total": total_guesses,
-            "updated_at": response_rows[0]["updated_at"] if response_rows else None,
-        },
-        "respondents": respondents,
-        "oils": oil_payload,
-        "metrics": metrics,
-        "survey_completion": survey_completion,
-        "word_cloud": word_cloud,
-        "recent_entries": recent_entries[:30],
-        "server_time": now_iso(),
-    }
-
-
-def normalize_oil_type(value: Any) -> str:
-    return re.sub(r"[^a-z0-9äöüß]+", "", str(value).casefold())
-
-
 def as_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -821,81 +783,299 @@ def as_float(value: Any) -> float | None:
     return None
 
 
-def extract_words(value: str) -> list[str]:
-    words = []
-    for raw in re.findall(r"[A-Za-zÄÖÜäöüß]{3,}", value.casefold()):
-        word = raw.strip(".,;:!?()[]{}\"'")
-        if len(word) >= 3 and word not in STOPWORDS:
-            words.append(word)
-    return words
+def average(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
 
 
-def csv_export(config: dict[str, Any]) -> str:
-    oils = slug_lookup(config["oils"])
-    survey_lookup = slug_lookup(config["surveys"])
-    sample_lookup = {
-        survey["id"]: {sample["cipher"]: sample for sample in survey.get("samples", [])}
-        for survey in config["surveys"]
+def population_stdev(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    return (sum((value - mean) ** 2 for value in values) / len(values)) ** 0.5
+
+
+def normalize_oil_type(value: Any) -> str:
+    return re.sub(r"[^a-z0-9äöüß]+", "", str(value).casefold())
+
+
+def rank_map(values: dict[str, float | None], reverse: bool = True) -> dict[str, int | None]:
+    ranked = sorted(
+        ((oil_id, value) for oil_id, value in values.items() if value is not None),
+        key=lambda item: item[1],
+        reverse=reverse,
+    )
+    ranks: dict[str, int | None] = {oil_id: None for oil_id in values}
+    previous_value: float | None = None
+    previous_rank = 0
+    for index, (oil_id, value) in enumerate(ranked, start=1):
+        if previous_value is not None and value == previous_value:
+            rank = previous_rank
+        else:
+            rank = index
+            previous_rank = rank
+            previous_value = value
+        ranks[oil_id] = rank
+    return ranks
+
+
+def stat_block(values: list[float], rank: int | None = None) -> dict[str, Any]:
+    avg = average(values)
+    return {
+        "avg": round(avg, 2) if avg is not None else None,
+        "count": len(values),
+        "rank": rank,
     }
 
+
+def ranking_payload(
+    title: str,
+    values: dict[str, float | None],
+    oils: list[dict[str, Any]],
+    ranks: dict[str, int | None],
+    unit: str,
+    subtitle: str = "",
+    reverse: bool = True,
+    key: str | None = None,
+) -> dict[str, Any]:
+    oil_lookup = slug_lookup(oils)
+    ordered = sorted(
+        [
+            {
+                "oil_id": oil_id,
+                "name": oil_lookup[oil_id]["name"],
+                "value": round(value, 2) if value is not None else None,
+                "rank": ranks.get(oil_id),
+            }
+            for oil_id, value in values.items()
+            if value is not None and oil_id in oil_lookup
+        ],
+        key=lambda item: item["rank"] or 999,
+        reverse=False,
+    )
+    if not reverse:
+        ordered = sorted(ordered, key=lambda item: item["rank"] or 999)
+    return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "items": ordered}
+
+
+def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    oils = active_oils(decryption)
+    oil_order = [oil["id"] for oil in oils]
+    oil_lookup = slug_lookup(oils)
+    surveys = public_runtime_config(config, decryption)["surveys"]
+    survey_lookup = slug_lookup(surveys)
+    survey_numbers = {survey["id"]: index + 1 for index, survey in enumerate(surveys)}
+    field_lookup = {
+        survey["id"]: {field["id"]: field for field in survey.get("fields", [])}
+        for survey in surveys
+    }
+    sample_lookup = cipher_to_oil(config, decryption)
+
+    oil_stats: dict[str, dict[str, Any]] = {}
+    for oil in oils:
+        oil_stats[oil["id"]] = {
+            "overall": [],
+            "overall_by_survey": {survey["id"]: [] for survey in surveys},
+            "overall_by_ip": {},
+            "bitter": [],
+            "guess_correct": 0,
+            "guess_total": 0,
+            "response_count": 0,
+            "comments": [],
+        }
+
     with connect_db() as db:
-        rows = db.execute(
+        response_rows = db.execute(
             """
-            SELECT sr.*, r.display_name, r.ip
+            SELECT sr.*, r.ip
             FROM survey_responses sr
             JOIN respondents r ON r.id = sr.respondent_id
-            ORDER BY sr.updated_at ASC
+            ORDER BY sr.updated_at DESC
             """
         ).fetchall()
+        session_count = db.execute("SELECT COUNT(*) AS count FROM respondents").fetchone()["count"]
 
-    entries = []
-    for row in rows:
-        survey = survey_lookup.get(row["survey_id"])
-        sample = sample_lookup.get(row["survey_id"], {}).get(row["cipher"])
-        if not survey or not sample:
+    tester_ids: set[int] = set()
+    for row in response_rows:
+        survey_id = row["survey_id"]
+        cipher = row["cipher"]
+        oil = sample_lookup.get((survey_id, cipher))
+        survey = survey_lookup.get(survey_id)
+        if not oil or not survey:
             continue
-        oil = oils.get(sample["oil_id"], {"name": sample["oil_id"]})
+
+        oil_id = oil["id"]
+        tester_ids.add(int(row["respondent_id"]))
+        oil_stats[oil_id]["response_count"] += 1
         try:
             answers = json.loads(row["answers_json"])
         except json.JSONDecodeError:
             answers = {}
-        entries.append(
+
+        overall = as_float(answers.get("overall"))
+        if overall is not None:
+            oil_stats[oil_id]["overall"].append(overall)
+            oil_stats[oil_id]["overall_by_survey"][survey_id].append(overall)
+            oil_stats[oil_id]["overall_by_ip"].setdefault(row["ip"], []).append(overall)
+
+        bitter = as_float(answers.get("bitter"))
+        if bitter is not None and "bitter" in field_lookup.get(survey_id, {}):
+            oil_stats[oil_id]["bitter"].append(bitter)
+
+        guess = answers.get("oil_guess")
+        if guess:
+            oil_stats[oil_id]["guess_total"] += 1
+            if normalize_oil_type(guess) == normalize_oil_type(oil.get("type", "")):
+                oil_stats[oil_id]["guess_correct"] += 1
+
+        comment = str(answers.get("aroma_profile") or "").strip()
+        if comment:
+            oil_stats[oil_id]["comments"].append(
+                {
+                    "survey_id": survey_id,
+                    "survey_title": survey.get("short_title", survey.get("title", survey_id)),
+                    "series_label": f"Testreihe {survey_numbers.get(survey_id, '?')}",
+                    "cipher": cipher,
+                    "text": comment,
+                    "updated_at": row["updated_at"],
+                }
+            )
+
+    overall_values = {oil_id: average(oil_stats[oil_id]["overall"]) for oil_id in oil_order}
+    overall_ranks = rank_map(overall_values, reverse=True)
+    spread_values = {oil_id: population_stdev(oil_stats[oil_id]["overall"]) for oil_id in oil_order}
+    spread_ranks = rank_map(spread_values, reverse=True)
+    own_spread_values: dict[str, float | None] = {}
+    own_spread_counts: dict[str, int] = {}
+    for oil_id in oil_order:
+        own_spreads = []
+        for values in oil_stats[oil_id]["overall_by_ip"].values():
+            spread = population_stdev(values)
+            if spread is not None:
+                own_spreads.append(spread)
+        own_spread_values[oil_id] = average(own_spreads)
+        own_spread_counts[oil_id] = len(own_spreads)
+    own_spread_ranks = rank_map(own_spread_values, reverse=True)
+    bitter_values = {oil_id: average(oil_stats[oil_id]["bitter"]) for oil_id in oil_order}
+    bitter_ranks = rank_map(bitter_values, reverse=True)
+    accuracy_values = {
+        oil_id: (
+            oil_stats[oil_id]["guess_correct"] / oil_stats[oil_id]["guess_total"]
+            if oil_stats[oil_id]["guess_total"]
+            else None
+        )
+        for oil_id in oil_order
+    }
+    accuracy_ranks = rank_map(accuracy_values, reverse=True)
+
+    overall_by_survey_values: dict[str, dict[str, float | None]] = {}
+    overall_by_survey_ranks: dict[str, dict[str, int | None]] = {}
+    for survey in surveys:
+        survey_id = survey["id"]
+        values = {oil_id: average(oil_stats[oil_id]["overall_by_survey"][survey_id]) for oil_id in oil_order}
+        overall_by_survey_values[survey_id] = values
+        overall_by_survey_ranks[survey_id] = rank_map(values, reverse=True)
+
+    rankings = [
+        ranking_payload("Gesamteindruck gesamt", overall_values, oils, overall_ranks, "Punkte"),
+    ]
+    for survey in surveys:
+        survey_id = survey["id"]
+        rankings.append(
+            ranking_payload(
+                f"Gesamteindruck: {survey.get('short_title', survey['title'])}",
+                overall_by_survey_values[survey_id],
+                oils,
+                overall_by_survey_ranks[survey_id],
+                "Punkte",
+            )
+        )
+    rankings.extend(
+        [
+            ranking_payload("eigene Streuung", own_spread_values, oils, own_spread_ranks, "Zahl", "Abweichung derselben IP über Testreihen", key="own_spread"),
+            ranking_payload("Streuung", spread_values, oils, spread_ranks, "σ", "höchste Streuung im Gesamteindruck"),
+            ranking_payload("Bitterkeit", bitter_values, oils, bitter_ranks, "Punkte", "bitterstes Öl zuerst"),
+            ranking_payload("Trefferquote", accuracy_values, oils, accuracy_ranks, "%", "korrekte Öl-Sorte"),
+        ]
+    )
+
+    oil_payload = []
+    for oil_id in oil_order:
+        oil = oil_lookup[oil_id]
+        stat = oil_stats[oil_id]
+        overall_by_survey = {}
+        for survey in surveys:
+            survey_id = survey["id"]
+            overall_by_survey[survey_id] = stat_block(
+                stat["overall_by_survey"][survey_id],
+                overall_by_survey_ranks[survey_id].get(oil_id),
+            )
+
+        spread_value = spread_values[oil_id]
+        guess_total = stat["guess_total"]
+        oil_payload.append(
             {
-                "updated_at": row["updated_at"],
-                "survey_title": survey.get("short_title", survey.get("title", row["survey_id"])),
-                "cipher": row["cipher"],
-                "oil_name": oil["name"],
-                "respondent": row["display_name"] or f"Gast {row['respondent_id']}",
-                "ip": row["ip"],
-                "answers": answers,
+                "id": oil_id,
+                "name": oil["name"],
+                "type": oil.get("type", ""),
+                "baseline": bool(oil.get("baseline")),
+                "ciphers": oil.get("ciphers", {}),
+                "response_count": stat["response_count"],
+                "overall": {
+                    "all": stat_block(stat["overall"], overall_ranks.get(oil_id)),
+                    "by_survey": overall_by_survey,
+                },
+                "spread": {
+                    "value": round(spread_value, 2) if spread_value is not None else None,
+                    "count": len(stat["overall"]),
+                    "rank": spread_ranks.get(oil_id),
+                },
+                "own_spread": {
+                    "value": round(own_spread_values[oil_id], 2) if own_spread_values[oil_id] is not None else None,
+                    "count": own_spread_counts[oil_id],
+                    "rank": own_spread_ranks.get(oil_id),
+                },
+                "bitter": stat_block(stat["bitter"], bitter_ranks.get(oil_id)),
+                "guess": {
+                    "accuracy": round(stat["guess_correct"] / guess_total, 3) if guess_total else None,
+                    "correct": stat["guess_correct"],
+                    "total": guess_total,
+                    "rank": accuracy_ranks.get(oil_id),
+                },
+                "comments": stat["comments"],
             }
         )
 
-    fields = set()
-    for entry in entries:
-        fields.update(entry["answers"].keys())
-    ordered_fields = sorted(fields)
+    total_guesses = sum(oil_stats[oil_id]["guess_total"] for oil_id in oil_order)
+    correct_guesses = sum(oil_stats[oil_id]["guess_correct"] for oil_id in oil_order)
+    total_samples = sum(len(survey.get("samples", [])) for survey in surveys)
+    response_count = sum(oil_stats[oil_id]["response_count"] for oil_id in oil_order)
+    expected_responses = len(tester_ids) * total_samples if tester_ids else 0
 
-    output = io.StringIO()
-    writer = csv.writer(output, delimiter=";")
-    writer.writerow(["Zeit", "Umfrage", "Chiffre", "Öl", "Gast", "IP", *ordered_fields])
-    for entry in entries:
-        writer.writerow(
-            [
-                entry["updated_at"],
-                entry["survey_title"],
-                entry["cipher"],
-                entry["oil_name"],
-                entry["respondent"],
-                entry["ip"],
-                *[entry["answers"].get(field, "") for field in ordered_fields],
-            ]
-        )
-    return output.getvalue()
+    return {
+        "ok": True,
+        "config": {
+            "event": config.get("event", {}),
+            "surveys": surveys,
+        },
+        "summary": {
+            "tester_count": len(tester_ids),
+            "session_count": session_count,
+            "response_count": response_count,
+            "expected_responses": expected_responses,
+            "completion_ratio": round(response_count / expected_responses, 3) if expected_responses else None,
+            "guess_accuracy": round(correct_guesses / total_guesses, 3) if total_guesses else None,
+            "guess_correct": correct_guesses,
+            "guess_total": total_guesses,
+            "updated_at": response_rows[0]["updated_at"] if response_rows else None,
+        },
+        "rankings": rankings,
+        "oils": oil_payload,
+        "server_time": now_iso(),
+    }
 
 
 class OilSurveyHandler(BaseHTTPRequestHandler):
-    server_version = "OilSurvey/1.0"
+    server_version = "OilSurvey/2.0"
 
     def log_message(self, format: str, *args: Any) -> None:
         sys.stdout.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), format % args))
@@ -903,7 +1083,7 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             self.route_get()
-        except Exception as exc:  # noqa: BLE001 - boundary for request handler
+        except Exception as exc:  # noqa: BLE001 - HTTP boundary
             error_response(self, 500, str(exc))
 
     def do_POST(self) -> None:
@@ -913,7 +1093,7 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             error_response(self, 400, "Ungültiges JSON.")
         except ValueError as exc:
             error_response(self, 400, str(exc))
-        except Exception as exc:  # noqa: BLE001 - boundary for request handler
+        except Exception as exc:  # noqa: BLE001 - HTTP boundary
             error_response(self, 500, str(exc))
 
     def route_get(self) -> None:
@@ -923,7 +1103,8 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
         config = load_config()
 
         if path == "/":
-            send_html(self, 200, render_home(self, config))
+            decryption = load_decryption(config)
+            send_html(self, 200, render_home(self, config, decryption))
             return
 
         if path.startswith("/static/"):
@@ -941,34 +1122,31 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_html(self, 200, render_results_page(config))
             return
 
-        if path == "/admin":
-            send_html(self, 200, render_admin_page(config))
+        if path == "/oel-auswahl":
+            send_html(self, 200, render_oil_selection_page(config))
             return
 
         if path == "/api/bootstrap":
+            decryption = load_decryption(config)
             respondent = get_or_create_respondent(self)
             survey_id = query.get("survey_id", [""])[0]
             headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
-            send_json(self, 200, bootstrap_payload(config, respondent, survey_id), headers)
+            send_json(self, 200, bootstrap_payload(config, decryption, respondent, survey_id), headers)
             return
 
         if path == "/api/results":
-            send_json(self, 200, result_payload(config))
+            decryption = load_decryption(config)
+            send_json(self, 200, result_payload(config, decryption))
+            return
+
+        if path == "/api/oils":
+            require_oil_password(query.get("password", [""])[0])
+            decryption = load_decryption(config)
+            send_json(self, 200, oil_selection_payload(config, decryption))
             return
 
         if path == "/api/config":
             send_json(self, 200, {"ok": True, "config": config})
-            return
-
-        if path == "/api/export.csv":
-            data = csv_export(config).encode("utf-8-sig")
-            send_bytes(
-                self,
-                200,
-                data,
-                "text/csv; charset=utf-8",
-                {"Content-Disposition": 'attachment; filename="oelverkostung-export.csv"'},
-            )
             return
 
         error_response(self, 404, "Nicht gefunden.")
@@ -979,17 +1157,48 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
         config = load_config()
 
         if path == "/api/response":
+            decryption = load_decryption(config)
             respondent = get_or_create_respondent(self)
             headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
             payload = read_json_body(self)
-            send_json(self, 200, upsert_response(config, respondent, payload), headers)
+            send_json(self, 200, upsert_response(config, decryption, respondent, payload), headers)
             return
 
-        if path == "/api/respondent":
-            respondent = get_or_create_respondent(self)
-            headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
+        if path == "/api/oils/add":
             payload = read_json_body(self)
-            send_json(self, 200, update_respondent(respondent, payload), headers)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, add_oil(config, decryption, payload))
+            return
+
+        if path == "/api/oils/remove":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, remove_oil(config, decryption, str(payload.get("oil_id", ""))))
+            return
+
+        if path == "/api/oils/clear":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, delete_oil_responses(config, decryption, str(payload.get("oil_id", ""))))
+            return
+
+        if path == "/api/oils/reset-db":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            reset_database()
+            decryption = load_decryption(config)
+            send_json(self, 200, oil_selection_payload(config, decryption))
             return
 
         if path == "/api/config":
@@ -1031,23 +1240,26 @@ def find_open_port(host: str, preferred: int) -> int:
 
 def run_server(host: str, port: int, open_browser: bool) -> None:
     init_db()
+    config = load_config()
+    decryption = load_decryption(config)
     actual_port = find_open_port(host, port)
     server = ThreadingHTTPServer((host, actual_port), OilSurveyHandler)
     origins = local_origins(actual_port)
 
-    print("\nÖlverkostungs-Tool läuft.")
+    print("\nOliven-Symposium läuft.")
     print("Zum Verteilen im lokalen Netzwerk:")
-    for survey in load_config()["surveys"]:
+    for survey in public_runtime_config(config, decryption)["surveys"]:
         print(f"  {survey.get('short_title', survey['id'])}: {origins[0]}/umfrage/{survey['id']}")
+    print(f"  Linktree:   {origins[0]}/")
     print(f"  Ergebnisse: {origins[0]}/ergebnisse")
-    print(f"  Setup:      {origins[0]}/admin")
+    print(f"  Öl-Auswahl: {origins[0]}/oel-auswahl")
     print("\nAlle gefundenen Adressen:")
     for origin in origins:
         print(f"  {origin}")
     print("\nBeenden mit Strg+C.\n")
 
     if open_browser:
-        threading.Timer(0.75, lambda: webbrowser.open(f"http://localhost:{actual_port}/ergebnisse")).start()
+        threading.Timer(0.75, lambda: webbrowser.open(f"http://localhost:{actual_port}/")).start()
 
     try:
         server.serve_forever()
@@ -1058,10 +1270,10 @@ def run_server(host: str, port: int, open_browser: bool) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Lokales Umfragen-Tool für Ölverkostungen.")
+    parser = argparse.ArgumentParser(description="Lokales Umfragen-Tool für das Oliven-Symposium.")
     parser.add_argument("--host", default="0.0.0.0", help="Bind-Adresse, Standard: 0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Start-Port, Standard: {DEFAULT_PORT}")
-    parser.add_argument("--no-browser", action="store_true", help="Ergebnis-Seite nicht automatisch öffnen")
+    parser.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
     return parser.parse_args()
 
 

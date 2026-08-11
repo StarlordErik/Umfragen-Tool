@@ -1,0 +1,350 @@
+{
+  "note": "Private Dechiffrierung. Nur Einträge mit implemented=true erscheinen in den Umfragen.",
+  "cipher_sets": {
+    "greek": [
+      "Alpha",
+      "Beta",
+      "Gamma",
+      "Delta",
+      "Epsilon",
+      "Zeta",
+      "Eta",
+      "Theta",
+      "Iota",
+      "Kappa",
+      "Lambda",
+      "Mu",
+      "Nu",
+      "Xi",
+      "Omikron",
+      "Pi",
+      "Rho",
+      "Sigma",
+      "Tau",
+      "Ypsilon",
+      "Phi",
+      "Chi",
+      "Psi",
+      "Omega"
+    ],
+    "latin": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K",
+      "L",
+      "M",
+      "N",
+      "O",
+      "P",
+      "Q",
+      "R",
+      "S",
+      "T",
+      "U",
+      "V",
+      "W",
+      "X"
+    ],
+    "number": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+      "21",
+      "22",
+      "23",
+      "24"
+    ]
+  },
+  "oils": [
+    {
+      "id": "buttinale-no-73",
+      "name": "Buttinale Originale Bio Olivenöl No. 73",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Psi",
+        "geruch": "F",
+        "gesamt": "22"
+      }
+    },
+    {
+      "id": "bio-planete",
+      "name": "Bio Planete Olivenöl nativ extra",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Eta",
+        "geruch": "X",
+        "gesamt": "17"
+      }
+    },
+    {
+      "id": "carapelli-extra",
+      "name": "Carapelli Natives Ölivenöl Extra",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Lambda",
+        "geruch": "H",
+        "gesamt": "6"
+      }
+    },
+    {
+      "id": "de-cecco-fruttato",
+      "name": "De Cecco Natives Olivenöl extra Fruttato (ggf.)",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Rho",
+        "geruch": "P",
+        "gesamt": "20"
+      }
+    },
+    {
+      "id": "rewe-bio",
+      "name": "Rewe Bio Natives Olivenöl",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Sigma",
+        "geruch": "W",
+        "gesamt": "14"
+      }
+    },
+    {
+      "id": "ja-raps",
+      "name": "ja! Rapsöl",
+      "type": "Rapsöl",
+      "baseline": true,
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Beta",
+        "geruch": "T",
+        "gesamt": "19"
+      }
+    },
+    {
+      "id": "horio-koroneiki",
+      "name": "Horio Koroneiki Variety (extra virgin olive oil)",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Xi",
+        "geruch": "B",
+        "gesamt": "4"
+      }
+    },
+    {
+      "id": "michals-special",
+      "name": "Michałs special Öl",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Alpha",
+        "geruch": "U",
+        "gesamt": "2"
+      }
+    },
+    {
+      "id": "veronesi-tartufo-bianco",
+      "name": "Veronesi: Tartufo Bianco Di Olivia",
+      "type": "Olivenöl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Kappa",
+        "geruch": "O",
+        "gesamt": "8"
+      }
+    },
+    {
+      "id": "platzhalter-01",
+      "name": "Platzhalter 01",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Ypsilon",
+        "geruch": "D",
+        "gesamt": "15"
+      }
+    },
+    {
+      "id": "platzhalter-02",
+      "name": "Platzhalter 02",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Omega",
+        "geruch": "L",
+        "gesamt": "21"
+      }
+    },
+    {
+      "id": "platzhalter-03",
+      "name": "Platzhalter 03",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Iota",
+        "geruch": "M",
+        "gesamt": "5"
+      }
+    },
+    {
+      "id": "platzhalter-04",
+      "name": "Platzhalter 04",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Theta",
+        "geruch": "N",
+        "gesamt": "1"
+      }
+    },
+    {
+      "id": "platzhalter-05",
+      "name": "Platzhalter 05",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Delta",
+        "geruch": "J",
+        "gesamt": "12"
+      }
+    },
+    {
+      "id": "platzhalter-06",
+      "name": "Platzhalter 06",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Phi",
+        "geruch": "I",
+        "gesamt": "3"
+      }
+    },
+    {
+      "id": "platzhalter-07",
+      "name": "Platzhalter 07",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Gamma",
+        "geruch": "R",
+        "gesamt": "18"
+      }
+    },
+    {
+      "id": "platzhalter-08",
+      "name": "Platzhalter 08",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Mu",
+        "geruch": "E",
+        "gesamt": "10"
+      }
+    },
+    {
+      "id": "platzhalter-09",
+      "name": "Platzhalter 09",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Omikron",
+        "geruch": "G",
+        "gesamt": "16"
+      }
+    },
+    {
+      "id": "platzhalter-10",
+      "name": "Platzhalter 10",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Epsilon",
+        "geruch": "Q",
+        "gesamt": "23"
+      }
+    },
+    {
+      "id": "platzhalter-11",
+      "name": "Platzhalter 11",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Pi",
+        "geruch": "C",
+        "gesamt": "9"
+      }
+    },
+    {
+      "id": "platzhalter-12",
+      "name": "Platzhalter 12",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Chi",
+        "geruch": "S",
+        "gesamt": "24"
+      }
+    },
+    {
+      "id": "platzhalter-13",
+      "name": "Platzhalter 13",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Zeta",
+        "geruch": "V",
+        "gesamt": "7"
+      }
+    },
+    {
+      "id": "platzhalter-14",
+      "name": "Platzhalter 14",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Tau",
+        "geruch": "K",
+        "gesamt": "11"
+      }
+    },
+    {
+      "id": "platzhalter-15",
+      "name": "Platzhalter 15",
+      "type": "Platzhalter",
+      "implemented": false,
+      "ciphers": {
+        "geschmack": "Nu",
+        "geruch": "A",
+        "gesamt": "13"
+      }
+    }
+  ]
+}

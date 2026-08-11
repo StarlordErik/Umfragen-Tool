@@ -1,88 +1,30 @@
 {
   "event": {
-    "title": "Ölverkostung",
-    "subtitle": "Subjektive Bewertung nach semi-wissenschaftlichen Standards",
-    "host_name": "Erik"
+    "title": "Oliven-Symposium",
+    "subtitle": "Subjektive Bewertung nach semi-wissenschaftlichen Standards"
   },
   "oil_type_options": [
     "Olivenöl",
     "Rapsöl",
-    "Haselnussöl",
-    "Walnussöl",
-    "Sonnenblumenöl",
-    "Leinöl",
-    "Kürbiskernöl",
-    "Anderes / unklar"
+    "Sesamöl"
   ],
   "result_metric_order": [
     "overall",
-    "bitter",
-    "sharp",
-    "aroma_intensity",
-    "fruity",
-    "nutty",
-    "harmony",
-    "favorite"
-  ],
-  "oils": [
-    {
-      "id": "raps",
-      "name": "Rapsöl",
-      "type": "Rapsöl",
-      "baseline": true
-    },
-    {
-      "id": "buttinale-no-73",
-      "name": "Buttinale Originale Bio Olivenöl No. 73",
-      "type": "Olivenöl"
-    },
-    {
-      "id": "carapelli-extra",
-      "name": "Carapelli Natives Olivenöl Extra",
-      "type": "Olivenöl"
-    },
-    {
-      "id": "rewe-bio",
-      "name": "Rewe Bio Natives Olivenöl",
-      "type": "Olivenöl"
-    },
-    {
-      "id": "de-cecco-fruttato",
-      "name": "De Cecco Natives Olivenöl extra Fruttato",
-      "type": "Olivenöl"
-    }
+    "bitter"
   ],
   "surveys": [
     {
       "id": "geschmack",
       "title": "Testreihe 1: Geschmack",
-      "short_title": "Geschmack",
-      "method": "Mit Nasenklammer",
+      "short_title": "Probieren ohne Geruchssinn",
       "accent": "#2f7d62",
-      "prompt": "Mit Nasenklammer probieren. Rapsöl dient als 0-Baseline.",
-      "samples": [
-        {
-          "cipher": "Alpha",
-          "oil_id": "raps"
-        },
-        {
-          "cipher": "Beta",
-          "oil_id": "de-cecco-fruttato"
-        },
-        {
-          "cipher": "Gamma",
-          "oil_id": "buttinale-no-73"
-        },
-        {
-          "cipher": "Delta",
-          "oil_id": "rewe-bio"
-        },
-        {
-          "cipher": "Epsilon",
-          "oil_id": "carapelli-extra"
-        }
-      ],
+      "cipher_set": "greek",
       "fields": [
+        {
+          "id": "oil_guess",
+          "kind": "select",
+          "label": "Öl-Sorte"
+        },
         {
           "id": "overall",
           "kind": "rating",
@@ -97,11 +39,6 @@
           "right_label": "Lieblingsöl"
         },
         {
-          "id": "oil_guess",
-          "kind": "select",
-          "label": "Öl-Sorte"
-        },
-        {
           "id": "bitter",
           "kind": "range",
           "label": "Bitterkeit",
@@ -110,197 +47,30 @@
           "min": 0,
           "max": 5,
           "step": 1,
-          "default": 0
-        },
-        {
-          "id": "sharp",
-          "kind": "range",
-          "label": "Schärfe",
-          "summary_label": "Scharf",
-          "metric_key": "sharp",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
-        },
-        {
-          "id": "mouthfeel",
-          "kind": "select",
-          "label": "Mundgefühl",
-          "options": [
-            "dünn",
-            "neutral",
-            "samtig",
-            "ölig-schwer",
-            "kratzig",
-            "unklar"
-          ]
+          "default": 0,
+          "left_label": "lecker",
+          "right_label": "Antibiotikum"
         },
         {
           "id": "aroma_profile",
           "kind": "textarea",
           "label": "Aromaprofil",
-          "placeholder": "z.B. nussig, grasig, mild, pfeffrig...",
-          "chips": [
-            "nussig",
-            "grasig",
-            "mild",
-            "bitter",
-            "pfeffrig",
-            "fruchtig"
-          ]
-        },
-        {
-          "id": "confidence",
-          "kind": "range",
-          "label": "Sicherheit der Einordnung",
-          "summary_label": "Sicherheit",
-          "metric_key": "confidence",
-          "min": 0,
-          "max": 100,
-          "step": 10,
-          "default": 50
+          "placeholder": "z.B. schmeckt nach der Sonne Kretas"
         }
       ]
     },
     {
       "id": "geruch",
       "title": "Testreihe 2: Geruch",
-      "short_title": "Geruch",
-      "method": "Nur riechen",
+      "short_title": "Riechen ohne Schmecken",
       "accent": "#3b6fb6",
-      "prompt": "Nur am Schälchen riechen. Nicht probieren.",
-      "samples": [
-        {
-          "cipher": "Kappa",
-          "oil_id": "raps"
-        },
-        {
-          "cipher": "Lambda",
-          "oil_id": "carapelli-extra"
-        },
-        {
-          "cipher": "Mu",
-          "oil_id": "rewe-bio"
-        },
-        {
-          "cipher": "Nu",
-          "oil_id": "buttinale-no-73"
-        },
-        {
-          "cipher": "Xi",
-          "oil_id": "de-cecco-fruttato"
-        }
-      ],
+      "cipher_set": "latin",
       "fields": [
-        {
-          "id": "overall",
-          "kind": "rating",
-          "label": "Geruchseindruck",
-          "summary_label": "Gesamt",
-          "metric_key": "overall",
-          "min": -5,
-          "max": 5,
-          "step": 1,
-          "default": 0,
-          "left_label": "unangenehm",
-          "right_label": "sehr gut"
-        },
         {
           "id": "oil_guess",
           "kind": "select",
           "label": "Öl-Sorte"
         },
-        {
-          "id": "aroma_intensity",
-          "kind": "range",
-          "label": "Aroma-Intensität",
-          "summary_label": "Aroma",
-          "metric_key": "aroma_intensity",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
-        },
-        {
-          "id": "fruity",
-          "kind": "range",
-          "label": "Fruchtigkeit",
-          "summary_label": "Fruchtig",
-          "metric_key": "fruity",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
-        },
-        {
-          "id": "nutty",
-          "kind": "range",
-          "label": "Nussigkeit",
-          "summary_label": "Nussig",
-          "metric_key": "nutty",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
-        },
-        {
-          "id": "aroma_profile",
-          "kind": "textarea",
-          "label": "Geruchsnotizen",
-          "placeholder": "z.B. frisch, grasig, neutral, muffig...",
-          "chips": [
-            "frisch",
-            "grasig",
-            "neutral",
-            "muffig",
-            "fruchtig",
-            "nussig"
-          ]
-        },
-        {
-          "id": "confidence",
-          "kind": "range",
-          "label": "Sicherheit der Einordnung",
-          "summary_label": "Sicherheit",
-          "metric_key": "confidence",
-          "min": 0,
-          "max": 100,
-          "step": 10,
-          "default": 50
-        }
-      ]
-    },
-    {
-      "id": "gesamt",
-      "title": "Testreihe 3: Ganze Erfahrung",
-      "short_title": "Ganze Erfahrung",
-      "method": "Ohne Einschränkung",
-      "accent": "#b65353",
-      "prompt": "Ohne Nasenklammer probieren. Geruch, Brot und Geschmack zusammen bewerten.",
-      "samples": [
-        {
-          "cipher": "A",
-          "oil_id": "raps"
-        },
-        {
-          "cipher": "B",
-          "oil_id": "buttinale-no-73"
-        },
-        {
-          "cipher": "C",
-          "oil_id": "carapelli-extra"
-        },
-        {
-          "cipher": "D",
-          "oil_id": "de-cecco-fruttato"
-        },
-        {
-          "cipher": "E",
-          "oil_id": "rewe-bio"
-        }
-      ],
-      "fields": [
         {
           "id": "overall",
           "kind": "rating",
@@ -315,9 +85,37 @@
           "right_label": "Lieblingsöl"
         },
         {
+          "id": "aroma_profile",
+          "kind": "textarea",
+          "label": "Aromaprofil",
+          "placeholder": "z.B. schmeckt nach der Sonne Kretas"
+        }
+      ]
+    },
+    {
+      "id": "gesamt",
+      "title": "Testreihe 3: ganze Erfahrung",
+      "short_title": "Erfahrung mit allen Sinnen",
+      "accent": "#b65353",
+      "cipher_set": "number",
+      "fields": [
+        {
           "id": "oil_guess",
           "kind": "select",
           "label": "Öl-Sorte"
+        },
+        {
+          "id": "overall",
+          "kind": "rating",
+          "label": "Gesamteindruck",
+          "summary_label": "Gesamt",
+          "metric_key": "overall",
+          "min": -5,
+          "max": 5,
+          "step": 1,
+          "default": 0,
+          "left_label": "nie wieder",
+          "right_label": "Lieblingsöl"
         },
         {
           "id": "bitter",
@@ -328,54 +126,15 @@
           "min": 0,
           "max": 5,
           "step": 1,
-          "default": 0
-        },
-        {
-          "id": "sharp",
-          "kind": "range",
-          "label": "Schärfe",
-          "summary_label": "Scharf",
-          "metric_key": "sharp",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
-        },
-        {
-          "id": "harmony",
-          "kind": "range",
-          "label": "Harmonie mit Brot",
-          "summary_label": "Harmonie",
-          "metric_key": "harmony",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
-        },
-        {
-          "id": "favorite",
-          "kind": "range",
-          "label": "Lieblingsöl-Potenzial",
-          "summary_label": "Favorit",
-          "metric_key": "favorite",
-          "min": 0,
-          "max": 5,
-          "step": 1,
-          "default": 0
+          "default": 0,
+          "left_label": "lecker",
+          "right_label": "Antibiotikum"
         },
         {
           "id": "aroma_profile",
           "kind": "textarea",
-          "label": "Gesamteindruck in Worten",
-          "placeholder": "Was bleibt hängen?",
-          "chips": [
-            "rund",
-            "spannend",
-            "langweilig",
-            "zu bitter",
-            "frisch",
-            "kaufbar"
-          ]
+          "label": "Aromaprofil",
+          "placeholder": "z.B. schmeckt nach der Sonne Kretas"
         }
       ]
     }
