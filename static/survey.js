@@ -31,6 +31,7 @@ const state = {
   config: null,
   survey: null,
   responses: {},
+  respondent: {},
   answers: {},
   timers: new Map(),
   saving: new Set(),
@@ -61,6 +62,7 @@ async function loadSurvey() {
   state.config = payload.config;
   state.survey = payload.survey;
   state.responses = payload.responses || {};
+  state.respondent = payload.respondent || {};
   state.answers = {};
   for (const sample of state.survey.samples) {
     state.answers[sample.cipher] = { ...(state.responses[sample.cipher]?.answers || {}) };
@@ -89,6 +91,7 @@ function render() {
         <h1>${escapeHtml(survey.title)}</h1>
         <p class="lead">${escapeHtml(survey.short_title || "")}</p>
       </div>
+      <div class="participant-pill">${escapeHtml(participantSheetLabel())}</div>
     </section>
 
     <section class="sample-list">
@@ -100,7 +103,7 @@ function render() {
         <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
         <div class="progress-value" id="progress-value"></div>
       </section>
-      <a class="ghost-button locked-link" id="linktree-link" href="/" aria-disabled="true">Linktree zum Oliven-Symposium</a>
+      <a class="ghost-button locked-link" id="linktree-link" href="/" aria-disabled="true">Startseite</a>
     </footer>
   `;
 
@@ -133,6 +136,13 @@ function renderSample(sample, open) {
   `;
 }
 
+function participantSheetLabel() {
+  const name = state.respondent.display_name || "anonym";
+  const index = state.config?.surveys?.findIndex((survey) => survey.id === state.survey?.id);
+  const number = Number.isInteger(index) && index >= 0 ? index + 1 : "";
+  return number ? `${name}'s Wertungsbogen ${number}` : name;
+}
+
 function cipherBadge(cipher) {
   if (state.survey.cipher_set === "greek") return greekSymbols[cipher] || cipher;
   return cipher;
@@ -156,10 +166,31 @@ function renderField(cipher, field) {
     `;
   }
 
+  if (field.kind === "yes_no") {
+    const yesValue = field.yes_value || "Olivenöl";
+    const noValue = field.no_value || "Nicht-Olivenöl";
+    return `
+      <fieldset class="field choice-field">
+        <legend>${escapeHtml(field.label)}</legend>
+        <div class="choice-row">
+          ${renderCheckOption(cipher, field.id, yesValue, "Ja", value === yesValue)}
+          ${renderCheckOption(cipher, field.id, noValue, "Nein", value === noValue)}
+        </div>
+      </fieldset>
+    `;
+  }
+
   if (field.kind === "textarea") {
+    const noCommentButton =
+      field.id === "aroma_profile"
+        ? `<button class="text-button no-comment-button" type="button" data-action="no-comment" data-cipher="${escapeHtml(cipher)}" data-field="${escapeHtml(field.id)}">kein Kommentar</button>`
+        : "";
     return `
       <div class="field full">
-        <label for="${fieldId(cipher, field.id)}">${escapeHtml(field.label)}</label>
+        <div class="textarea-heading">
+          <label for="${fieldId(cipher, field.id)}">${escapeHtml(field.label)}</label>
+          ${noCommentButton}
+        </div>
         <textarea id="${fieldId(cipher, field.id)}" data-cipher="${escapeHtml(cipher)}" data-field="${escapeHtml(field.id)}" rows="4" placeholder="${escapeHtml(field.placeholder || "")}">${escapeHtml(value)}</textarea>
       </div>
     `;
@@ -173,11 +204,8 @@ function renderField(cipher, field) {
       <div class="field">
         <label for="${fieldId(cipher, field.id)}">${escapeHtml(field.label)}</label>
         <div class="range-widget">
-          <div class="range-endpoints">
-            <span>${escapeHtml(min)}</span>
-            <span>${escapeHtml(max)}</span>
-          </div>
           <div class="range-control">
+            ${renderTicks(min, max, Number(field.tick_step ?? step))}
             <input
               id="${fieldId(cipher, field.id)}"
               type="range"
@@ -190,7 +218,6 @@ function renderField(cipher, field) {
             >
             <output class="range-bubble" data-output="${escapeHtml(cipher)}:${escapeHtml(field.id)}">${escapeHtml(formatValue(value))}</output>
           </div>
-          ${renderTicks(min, max, step)}
           <div class="range-labels">
             <span>${escapeHtml(field.left_label || "")}</span>
             <span>${escapeHtml(field.right_label || "")}</span>
@@ -208,9 +235,36 @@ function renderField(cipher, field) {
   `;
 }
 
+function renderCheckOption(cipher, fieldIdValue, value, label, checked) {
+  return `
+    <label class="check-option">
+      <input
+        type="checkbox"
+        value="${escapeHtml(value)}"
+        data-cipher="${escapeHtml(cipher)}"
+        data-field="${escapeHtml(fieldIdValue)}"
+        ${checked ? "checked" : ""}
+      >
+      <span>${escapeHtml(label)}</span>
+    </label>
+  `;
+}
+
 function renderTicks(min, max, step) {
-  const count = Math.floor((max - min) / step) + 1;
-  return `<div class="tick-row" aria-hidden="true">${Array.from({ length: count }, () => "<span></span>").join("")}</div>`;
+  const safeStep = Math.max(Number(step) || 1, 1);
+  const start = Math.ceil(min / safeStep) * safeStep;
+  const values = [];
+  for (let value = start; value <= max; value += safeStep) {
+    values.push(value);
+  }
+  if (!values.length || values[0] !== min) values.unshift(min);
+  if (values[values.length - 1] !== max) values.push(max);
+  return `<div class="tick-row" aria-hidden="true">${values
+    .map((value) => {
+      const ratio = max === min ? 0 : (value - min) / (max - min);
+      return `<span style="left:${escapeHtml(Math.max(0, Math.min(100, ratio * 100)))}%"></span>`;
+    })
+    .join("")}</div>`;
 }
 
 function fieldId(cipher, fieldIdValue) {
@@ -239,6 +293,17 @@ function handleClick(event) {
     card?.classList.toggle("open");
     setTimeout(() => updateCardRanges(card), 0);
   }
+
+  if (target.dataset.action === "no-comment") {
+    const card = cardFor(target.dataset.cipher);
+    const input = card?.querySelector(`textarea[data-field="${cssEscape(target.dataset.field)}"]`);
+    if (!input) return;
+    input.value = "kein Kommentar";
+    updateAnswerFromInput(input);
+    scheduleSave(target.dataset.cipher);
+    updateCardState(target.dataset.cipher);
+    updateProgress();
+  }
 }
 
 function handleInput(event) {
@@ -259,6 +324,19 @@ function updateAnswerFromInput(input) {
   if (input.type === "range") {
     value = Number(input.value);
     setRangeVisual(input);
+  }
+  if (input.type === "checkbox") {
+    const group = input.closest(".choice-row");
+    if (input.checked) {
+      for (const other of group?.querySelectorAll('input[type="checkbox"]') || []) {
+        if (other !== input) other.checked = false;
+      }
+      value = input.value;
+    } else if (state.answers[cipher][field] === input.value) {
+      value = "";
+    } else {
+      return;
+    }
   }
 
   state.answers[cipher][field] = value;

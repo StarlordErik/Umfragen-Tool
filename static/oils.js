@@ -13,6 +13,8 @@ const escapeHtml = (value) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 
+const euro = (value) => (value === null || value === undefined ? "Realpreis unbekannt" : `${Number(value).toFixed(0)} €/l`);
+
 function renderLogin(error = "") {
   app.innerHTML = `
     <section class="admin-header">
@@ -21,7 +23,7 @@ function renderLogin(error = "") {
         <h1>Öl-Auswahl</h1>
         <p class="lead">Passwort eingeben, um Öle und Wertungen zu verwalten.</p>
       </div>
-      <a class="ghost-button" href="/">Linktree</a>
+      <a class="ghost-button" href="/">Startseite</a>
     </section>
 
     <section class="setup-editor oil-login-panel">
@@ -59,7 +61,7 @@ function renderOils(message = "") {
         <h1>Öl-Auswahl</h1>
         <p class="lead">Hinzufügen ist nur mit freien Platzhaltern möglich. Entfernen geht nur ohne Wertungen.</p>
       </div>
-      <a class="ghost-button" href="/">Linktree</a>
+      <a class="ghost-button" href="/">Startseite</a>
     </section>
 
     <section class="setup-editor add-oil-panel">
@@ -70,11 +72,22 @@ function renderOils(message = "") {
           <input id="new-oil-name" type="text" maxlength="160" placeholder="Name des Öls" ${canAdd ? "" : "disabled"}>
         </label>
         <label>
-          Öl-Sorte
-          <select id="new-oil-type" ${canAdd ? "" : "disabled"}>
-            ${payload.oil_type_options.map((option) => `<option value="${escapeHtml(option)}">${escapeHtml(option)}</option>`).join("")}
-          </select>
+          Preis pro Liter
+          <input id="new-oil-price" type="number" min="1" step="1" placeholder="€ pro Liter" ${canAdd ? "" : "disabled"}>
         </label>
+        <fieldset class="oil-type-field">
+          <legend>Ist das ein Olivenöl?</legend>
+          <div class="choice-row">
+            <label class="check-option">
+              <input id="new-oil-olive-yes" type="checkbox" data-oil-kind="olive" ${canAdd ? "checked" : "disabled"}>
+              <span>Ja</span>
+            </label>
+            <label class="check-option">
+              <input id="new-oil-olive-no" type="checkbox" data-oil-kind="olive" ${canAdd ? "" : "disabled"}>
+              <span>Nein</span>
+            </label>
+          </div>
+        </fieldset>
         <button class="save-button" type="button" data-action="add-oil" ${canAdd ? "" : "disabled"}>Hinzufügen</button>
       </div>
       <p class="notice ${message.startsWith("Fehler") ? "error" : ""}">${escapeHtml(message || (canAdd ? " " : "Keine freien Platzhalter mehr."))}</p>
@@ -96,8 +109,17 @@ function renderOilRow(oil) {
   return `
     <article class="oil-admin-row">
       <div>
-        <h2>${escapeHtml(oil.name)}</h2>
-        <p class="metric-sub">${escapeHtml(oil.type)} · ${escapeHtml(oil.response_count)} Wertungen</p>
+        <div class="oil-edit-grid">
+          <label>
+            Name
+            <input type="text" maxlength="160" value="${escapeHtml(oil.name)}" data-edit-field="name" data-oil-id="${escapeHtml(oil.id)}">
+          </label>
+          <label>
+            Preis pro Liter
+            <input type="number" min="1" step="1" value="${escapeHtml(oil.actual_price_per_liter_eur ?? "")}" data-edit-field="price" data-oil-id="${escapeHtml(oil.id)}">
+          </label>
+        </div>
+        <p class="metric-sub">${escapeHtml(oil.type)} · ${escapeHtml(euro(oil.actual_price_per_liter_eur))} · ${escapeHtml(oil.response_count)} Wertungen</p>
         <div class="cipher-mini-row">
           <span>Geschmack: ${escapeHtml(oil.ciphers.geschmack || "-")}</span>
           <span>Geruch: ${escapeHtml(oil.ciphers.geruch || "-")}</span>
@@ -105,6 +127,7 @@ function renderOilRow(oil) {
         </div>
       </div>
       <div class="oil-admin-actions">
+        <button class="save-button" type="button" data-action="update-oil" data-oil-id="${escapeHtml(oil.id)}">Speichern</button>
         <button class="ghost-button" type="button" data-action="clear-oil" data-oil-id="${escapeHtml(oil.id)}" ${oil.response_count ? "" : "disabled"}>Wertungen löschen</button>
         <button class="ghost-button danger-button" type="button" data-action="remove-oil" data-oil-id="${escapeHtml(oil.id)}" ${oil.can_remove ? "" : "disabled"}>Entfernen</button>
       </div>
@@ -141,10 +164,24 @@ async function handleClick(event) {
 
   if (action === "add-oil") {
     const name = document.getElementById("new-oil-name")?.value.trim() || "";
-    const type = document.getElementById("new-oil-type")?.value || "";
+    const price = document.getElementById("new-oil-price")?.value || "";
+    const isOliveOil = Boolean(document.getElementById("new-oil-olive-yes")?.checked);
     try {
-      await postAction("/api/oils/add", { name, type });
+      await postAction("/api/oils/add", { name, actual_price_per_liter_eur: price, is_olive_oil: isOliveOil });
       renderOils("Öl hinzugefügt.");
+    } catch (error) {
+      renderOils(`Fehler: ${error.message}`);
+    }
+  }
+
+  if (action === "update-oil") {
+    const oilId = target.dataset.oilId;
+    const row = target.closest(".oil-admin-row");
+    const name = row?.querySelector('[data-edit-field="name"]')?.value.trim() || "";
+    const price = row?.querySelector('[data-edit-field="price"]')?.value || "";
+    try {
+      await postAction("/api/oils/update", { oil_id: oilId, name, actual_price_per_liter_eur: price });
+      renderOils("Öl gespeichert.");
     } catch (error) {
       renderOils(`Fehler: ${error.message}`);
     }
@@ -173,6 +210,20 @@ app.addEventListener("click", (event) => {
     if (state.payload) renderOils(`Fehler: ${error.message}`);
     else renderLogin(error.message);
   });
+});
+
+app.addEventListener("change", (event) => {
+  const input = event.target.closest('input[type="checkbox"][data-oil-kind="olive"]');
+  if (!input) return;
+  const group = input.closest(".choice-row");
+  const options = Array.from(group?.querySelectorAll('input[type="checkbox"][data-oil-kind="olive"]') || []);
+  if (input.checked) {
+    for (const option of options) {
+      if (option !== input) option.checked = false;
+    }
+  } else if (!options.some((option) => option.checked)) {
+    input.checked = true;
+  }
 });
 
 app.addEventListener("keydown", (event) => {

@@ -31,6 +31,7 @@ COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
 UPDATE_LOCK = threading.Lock()
 OIL_SELECTION_PASSWORD = "Erik"
+RESULTS_PASSWORD = "Öl"
 
 
 @dataclass
@@ -39,6 +40,8 @@ class Respondent:
     token: str
     ip: str
     user_agent: str
+    display_name: str | None
+    publish_name: bool
     is_new_cookie: bool
 
 
@@ -160,9 +163,20 @@ def survey_samples(config: dict[str, Any], decryption: dict[str, Any], survey: d
 
 
 def public_runtime_config(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    max_price = max_actual_price(decryption)
     surveys = []
     for survey in config["surveys"]:
         item = dict(survey)
+        fields = []
+        for field in survey.get("fields", []):
+            field_item = dict(field)
+            if field_item.get("id") == "price_guess":
+                minimum = field_item.get("min", 1)
+                field_item["max"] = max_price
+                field_item["right_label"] = f"{max_price} €"
+                field_item["default"] = minimum
+            fields.append(field_item)
+        item["fields"] = fields
         item["samples"] = survey_samples(config, decryption, survey)
         surveys.append(item)
     return {
@@ -170,6 +184,15 @@ def public_runtime_config(config: dict[str, Any], decryption: dict[str, Any]) ->
         "oil_type_options": config.get("oil_type_options", []),
         "surveys": surveys,
     }
+
+
+def max_actual_price(decryption: dict[str, Any]) -> int:
+    prices = [
+        as_float(oil.get("actual_price_per_liter_eur"))
+        for oil in active_oils(decryption)
+        if as_float(oil.get("actual_price_per_liter_eur")) is not None
+    ]
+    return max(1, round(max(prices))) if prices else 50
 
 
 def cipher_to_oil(config: dict[str, Any], decryption: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -214,6 +237,9 @@ def oil_selection_payload(config: dict[str, Any], decryption: dict[str, Any]) ->
                 "id": oil["id"],
                 "name": oil.get("name", ""),
                 "type": oil.get("type", ""),
+                "is_olive_oil": bool(oil.get("is_olive_oil", oil.get("type") == "Olivenöl")),
+                "actual_price_per_liter_eur": oil.get("actual_price_per_liter_eur"),
+                "price_source": oil.get("price_source"),
                 "implemented": bool(oil.get("implemented")),
                 "baseline": bool(oil.get("baseline")),
                 "ciphers": oil.get("ciphers", {}),
@@ -256,13 +282,22 @@ def unique_oil_id(base: str, decryption: dict[str, Any]) -> str:
     return f"{candidate}-{suffix}"
 
 
+def required_price(value: Any) -> int:
+    price = as_float(value)
+    if price is None or price <= 0:
+        raise ValueError("Preis pro Liter fehlt.")
+    return max(1, round(price))
+
+
 def add_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     name = str(payload.get("name", "")).strip()
-    oil_type = str(payload.get("type", "")).strip()
+    is_olive_oil = bool(payload.get("is_olive_oil"))
+    oil_type = "Olivenöl" if is_olive_oil else "Nicht-Olivenöl"
+    price = required_price(payload.get("actual_price_per_liter_eur"))
     if not name:
         raise ValueError("Ölname fehlt.")
     if oil_type not in config.get("oil_type_options", []):
-        raise ValueError("Öl-Sorte ist nicht erlaubt.")
+        raise ValueError("Öl-Kategorie ist nicht erlaubt.")
 
     slot = next((oil for oil in decryption["oils"] if not oil.get("implemented")), None)
     if slot is None:
@@ -276,10 +311,29 @@ def add_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[st
             "id": new_id,
             "name": name[:160],
             "type": oil_type,
+            "is_olive_oil": is_olive_oil,
+            "actual_price_per_liter_eur": price,
+            "price_source": "Öl-Auswahl",
             "implemented": True,
             "ciphers": ciphers,
         }
     )
+    save_decryption(config, decryption)
+    return oil_selection_payload(config, decryption)
+
+
+def update_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    oil_id = str(payload.get("oil_id", ""))
+    name = str(payload.get("name", "")).strip()
+    price = required_price(payload.get("actual_price_per_liter_eur"))
+    if not name:
+        raise ValueError("Ölname fehlt.")
+    oil = next((item for item in decryption["oils"] if item.get("id") == oil_id and item.get("implemented")), None)
+    if not oil:
+        raise ValueError("Öl nicht gefunden.")
+    oil["name"] = name[:160]
+    oil["actual_price_per_liter_eur"] = price
+    oil["price_source"] = "Öl-Auswahl"
     save_decryption(config, decryption)
     return oil_selection_payload(config, decryption)
 
@@ -349,6 +403,11 @@ def require_oil_password(value: Any) -> None:
         raise ValueError("Passwort ist falsch.")
 
 
+def require_results_password(value: Any) -> None:
+    if value != RESULTS_PASSWORD:
+        raise ValueError("Passwort ist falsch.")
+
+
 def connect_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
@@ -368,6 +427,7 @@ def init_db() -> None:
                 ip TEXT NOT NULL,
                 user_agent TEXT NOT NULL,
                 display_name TEXT,
+                publish_name INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -386,8 +446,20 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_respondents_ip_agent
                 ON respondents(ip, user_agent, updated_at);
 
+            CREATE INDEX IF NOT EXISTS idx_respondents_display_name
+                ON respondents(display_name COLLATE NOCASE, updated_at);
+
             CREATE INDEX IF NOT EXISTS idx_responses_updated
                 ON survey_responses(updated_at);
+            """
+        )
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(respondents)").fetchall()}
+        if "publish_name" not in columns:
+            db.execute("ALTER TABLE respondents ADD COLUMN publish_name INTEGER NOT NULL DEFAULT 0")
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_respondents_display_name
+                ON respondents(display_name COLLATE NOCASE, updated_at)
             """
         )
 
@@ -457,8 +529,112 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
         token=str(row["token"]),
         ip=str(row["ip"]),
         user_agent=str(row["user_agent"]),
+        display_name=str(row["display_name"]) if row["display_name"] else None,
+        publish_name=bool(row["publish_name"]) if "publish_name" in row.keys() else False,
         is_new_cookie=is_new_cookie,
     )
+
+
+def participant_payload(respondent: Respondent) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "participant": {
+            "display_name": respondent.display_name or "",
+            "publish_name": respondent.publish_name,
+        },
+    }
+
+
+def clean_display_name(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())[:80]
+
+
+def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str] | None]:
+    respondent = get_or_create_respondent(handler)
+    display_name = clean_display_name(payload.get("display_name"))
+    publish_name = bool(payload.get("publish_name"))
+    timestamp = now_iso()
+
+    with UPDATE_LOCK, connect_db() as db:
+        target = None
+        if display_name:
+            target = db.execute(
+                """
+                SELECT * FROM respondents
+                WHERE display_name = ? COLLATE NOCASE AND id != ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (display_name, respondent.id),
+            ).fetchone()
+
+        target_id = int(target["id"]) if target else respondent.id
+        target_token = respondent.token
+
+        if target and target_id != respondent.id:
+            current_rows = db.execute(
+                "SELECT * FROM survey_responses WHERE respondent_id = ?",
+                (respondent.id,),
+            ).fetchall()
+            for current in current_rows:
+                existing = db.execute(
+                    """
+                    SELECT updated_at
+                    FROM survey_responses
+                    WHERE respondent_id = ? AND survey_id = ? AND cipher = ?
+                    """,
+                    (target_id, current["survey_id"], current["cipher"]),
+                ).fetchone()
+                if existing is None or str(current["updated_at"]) >= str(existing["updated_at"]):
+                    db.execute(
+                        """
+                        INSERT INTO survey_responses (
+                            respondent_id, survey_id, cipher, answers_json, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(respondent_id, survey_id, cipher)
+                        DO UPDATE SET answers_json = excluded.answers_json, updated_at = excluded.updated_at
+                        """,
+                        (
+                            target_id,
+                            current["survey_id"],
+                            current["cipher"],
+                            current["answers_json"],
+                            current["created_at"],
+                            current["updated_at"],
+                        ),
+                    )
+            db.execute("DELETE FROM survey_responses WHERE respondent_id = ?", (respondent.id,))
+            db.execute("DELETE FROM respondents WHERE id = ?", (respondent.id,))
+
+        db.execute(
+            """
+            UPDATE respondents
+            SET token = ?, ip = ?, user_agent = ?, display_name = ?, publish_name = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                target_token,
+                respondent.ip,
+                respondent.user_agent,
+                display_name or None,
+                1 if publish_name else 0,
+                timestamp,
+                target_id,
+            ),
+        )
+        row = db.execute("SELECT * FROM respondents WHERE id = ?", (target_id,)).fetchone()
+
+    updated = Respondent(
+        id=int(row["id"]),
+        token=str(row["token"]),
+        ip=str(row["ip"]),
+        user_agent=str(row["user_agent"]),
+        display_name=str(row["display_name"]) if row["display_name"] else None,
+        publish_name=bool(row["publish_name"]),
+        is_new_cookie=False,
+    )
+    return participant_payload(updated), {"Set-Cookie": cookie_header(updated.token)}
 
 
 def read_json_body(handler: BaseHTTPRequestHandler) -> Any:
@@ -468,7 +644,16 @@ def read_json_body(handler: BaseHTTPRequestHandler) -> Any:
     if length > 1_000_000:
         raise ValueError("Request ist zu groß.")
     raw = handler.rfile.read(length)
-    return json.loads(raw.decode("utf-8"))
+    charset = handler.headers.get_content_charset() or "utf-8"
+    encodings = dict.fromkeys([charset, "utf-8-sig", "utf-8", "cp1252", "latin-1"])
+    for encoding in encodings:
+        try:
+            return json.loads(raw.decode(encoding))
+        except UnicodeDecodeError:
+            continue
+        except LookupError:
+            continue
+    raise ValueError("Request-Body konnte nicht gelesen werden.")
 
 
 def send_bytes(
@@ -514,7 +699,7 @@ def page_shell(title: str, body: str, scripts: str = "", head_extra: str = "") -
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f7f8fa">
+  <meta name="theme-color" content="#121417">
   <title>{escaped_title}</title>
   <link rel="stylesheet" href="/static/styles.css">
   {head_extra}
@@ -570,17 +755,13 @@ def host_score(host: str) -> tuple[int, str]:
     return (5, host)
 
 
-def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decryption: dict[str, Any]) -> str:
-    port = handler.server.server_address[1]
-    host_header = handler.headers.get("Host", f"localhost:{port}")
-    current_origin = f"http://{host_header}"
-    lan_origins = local_origins(port)
-    preferred_origin = lan_origins[0] if lan_origins else current_origin
-
+def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decryption: dict[str, Any], respondent: Respondent) -> str:
+    can_open_surveys = bool(respondent.display_name)
     survey_cards = []
     for survey in public_runtime_config(config, decryption)["surveys"]:
         href = f"/umfrage/{survey['id']}"
-        external_href = f"{preferred_origin}{href}"
+        link_class = "primary-link survey-entry-link" if can_open_surveys else "primary-link survey-entry-link locked-link"
+        aria_disabled = "false" if can_open_surveys else "true"
         survey_cards.append(
             f"""
             <article class="link-card" style="--accent:{html.escape(survey.get('accent', '#277c61'))}">
@@ -588,32 +769,55 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
                 <p class="eyebrow">{html.escape(survey.get('short_title', 'Testreihe'))}</p>
                 <h2>{html.escape(survey.get('title', survey['id']))}</h2>
               </div>
-              <a class="primary-link" href="{html.escape(href)}">Öffnen</a>
-              <code>{html.escape(external_href)}</code>
+              <a class="{link_class}" href="{html.escape(href)}" aria-disabled="{aria_disabled}">Öffnen</a>
             </article>
             """
         )
 
     return page_shell(
-        "Linktree zum Oliven-Symposium",
+        "Studie des Oliven-Symposiums",
         f"""
-        <main class="page">
+        <main id="home-app" class="page">
           <section class="topbar">
             <div>
-              <p class="eyebrow">{html.escape(config.get('event', {}).get('title', 'Oliven-Symposium'))}</p>
-              <h1>Linktree zum Oliven-Symposium</h1>
-            </div>
-            <div class="topbar-actions">
-              <a class="ghost-button" href="/oel-auswahl">Öl-Auswahl</a>
-              <a class="primary-link" href="/ergebnisse">Ergebnisse</a>
+              <h1>Studie des Oliven-Symposiums</h1>
             </div>
           </section>
 
-          <section class="link-grid">
+          <section class="setup-editor participant-panel">
+            <div class="participant-form">
+              <label>
+                Name
+                <input id="participant-name" type="text" maxlength="80" autocomplete="name" placeholder="Name eingeben">
+              </label>
+              <label class="check-option publish-option">
+                <input id="participant-publish" type="checkbox">
+                <span>Name bei Aromaprofil-Kommentaren veröffentlichen</span>
+              </label>
+            </div>
+            <p class="notice" id="participant-state"> </p>
+          </section>
+
+          <section class="link-grid result-link-grid">
+            <article class="link-card result-link-card" style="--accent:#f3f5f7;--accent-contrast:#111827;--accent-hover-contrast:#111827">
+              <div>
+                <p class="eyebrow">Live-Auswertung</p>
+                <h2>Ergebnisse</h2>
+              </div>
+              <a class="primary-link" href="/ergebnisse">Öffnen</a>
+            </article>
+          </section>
+
+          <section class="link-grid survey-link-grid">
             {''.join(survey_cards)}
+          </section>
+
+          <section class="admin-link-section">
+            <a class="ghost-button" href="/oel-auswahl">Öl-Auswahl</a>
           </section>
         </main>
         """,
+        '<script src="/static/home.js" defer></script>',
     )
 
 
@@ -637,8 +841,9 @@ def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
     )
 
 
-def render_results_page(config: dict[str, Any]) -> str:
-    title = f"Ergebnisse · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
+def render_results_page(config: dict[str, Any], mode: str = "rankings") -> str:
+    page_title = "Aufschlüsselung je Öl" if mode == "oils" else "Ergebnisse"
+    title = f"{page_title} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
     return page_shell(
         title,
         """
@@ -646,7 +851,10 @@ def render_results_page(config: dict[str, Any]) -> str:
           <div class="loading-panel">Ergebnisse werden geladen...</div>
         </main>
         """,
-        '<script src="/static/results.js" defer></script>',
+        f"""
+        <script>window.RESULTS_MODE = {json.dumps(mode)};</script>
+        <script src="/static/results.js" defer></script>
+        """,
     )
 
 
@@ -691,7 +899,10 @@ def bootstrap_payload(config: dict[str, Any], decryption: dict[str, Any], respon
         "ok": True,
         "config": runtime_config,
         "survey": survey,
-        "respondent": {"anonymous": True},
+        "respondent": {
+            "display_name": respondent.display_name or "",
+            "publish_name": respondent.publish_name,
+        },
         "responses": responses,
         "server_time": now_iso(),
     }
@@ -717,6 +928,9 @@ def upsert_response(
     respondent: Respondent,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    if not respondent.display_name:
+        raise ValueError("Bitte zuerst einen Namen auf der Startseite speichern.")
+
     survey_id = str(payload.get("survey_id", ""))
     cipher = str(payload.get("cipher", ""))
     answers = payload.get("answers")
@@ -798,6 +1012,30 @@ def normalize_oil_type(value: Any) -> str:
     return re.sub(r"[^a-z0-9äöüß]+", "", str(value).casefold())
 
 
+def olive_oil_flag(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    normalized = normalize_oil_type(value)
+    if normalized in {"olivenöl", "ja", "yes", "true", "1"}:
+        return True
+    if normalized in {"nichtolivenöl", "nein", "no", "false", "0", "rapsöl", "sesamöl"}:
+        return False
+    return None
+
+
+def oil_is_olive_oil(oil: dict[str, Any]) -> bool:
+    if "is_olive_oil" in oil:
+        return bool(oil.get("is_olive_oil"))
+    return normalize_oil_type(oil.get("type", "")) == "olivenöl"
+
+
+def guess_matches_oil(guess: Any, oil: dict[str, Any]) -> bool:
+    guessed_olive = olive_oil_flag(guess)
+    if guessed_olive is not None:
+        return guessed_olive == oil_is_olive_oil(oil)
+    return normalize_oil_type(guess) == normalize_oil_type(oil.get("type", ""))
+
+
 def rank_map(values: dict[str, float | None], reverse: bool = True) -> dict[str, int | None]:
     ranked = sorted(
         ((oil_id, value) for oil_id, value in values.items() if value is not None),
@@ -827,6 +1065,38 @@ def stat_block(values: list[float], rank: int | None = None) -> dict[str, Any]:
     }
 
 
+def median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def box_plot(values: list[float]) -> dict[str, Any] | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    lower = ordered[:middle]
+    upper = ordered[middle + 1 :] if len(ordered) % 2 else ordered[middle:]
+    q1 = median(lower) if lower else ordered[0]
+    q3 = median(upper) if upper else ordered[-1]
+    med = median(ordered)
+    avg = average(ordered)
+    return {
+        "min": round(ordered[0], 2),
+        "q1": round(q1, 2) if q1 is not None else None,
+        "median": round(med, 2) if med is not None else None,
+        "avg": round(avg, 2) if avg is not None else None,
+        "q3": round(q3, 2) if q3 is not None else None,
+        "max": round(ordered[-1], 2),
+        "count": len(ordered),
+    }
+
+
 def ranking_payload(
     title: str,
     values: dict[str, float | None],
@@ -836,6 +1106,8 @@ def ranking_payload(
     subtitle: str = "",
     reverse: bool = True,
     key: str | None = None,
+    color: str | None = None,
+    distributions: dict[str, list[float]] | None = None,
 ) -> dict[str, Any]:
     oil_lookup = slug_lookup(oils)
     ordered = sorted(
@@ -845,6 +1117,7 @@ def ranking_payload(
                 "name": oil_lookup[oil_id]["name"],
                 "value": round(value, 2) if value is not None else None,
                 "rank": ranks.get(oil_id),
+                "box": box_plot((distributions or {}).get(oil_id, [])),
             }
             for oil_id, value in values.items()
             if value is not None and oil_id in oil_lookup
@@ -854,7 +1127,7 @@ def ranking_payload(
     )
     if not reverse:
         ordered = sorted(ordered, key=lambda item: item["rank"] or 999)
-    return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "items": ordered}
+    return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "color": color, "items": ordered}
 
 
 def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
@@ -864,6 +1137,11 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
     surveys = public_runtime_config(config, decryption)["surveys"]
     survey_lookup = slug_lookup(surveys)
     survey_numbers = {survey["id"]: index + 1 for index, survey in enumerate(surveys)}
+    comment_series_labels = {
+        "geschmack": "Geschmack",
+        "geruch": "Geruch",
+        "gesamt": "gesamt",
+    }
     field_lookup = {
         survey["id"]: {field["id"]: field for field in survey.get("fields", [])}
         for survey in surveys
@@ -875,8 +1153,10 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         oil_stats[oil["id"]] = {
             "overall": [],
             "overall_by_survey": {survey["id"]: [] for survey in surveys},
-            "overall_by_ip": {},
+            "overall_by_respondent": {},
             "bitter": [],
+            "price_guess": [],
+            "price_deviation": [],
             "guess_correct": 0,
             "guess_total": 0,
             "response_count": 0,
@@ -886,7 +1166,7 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
     with connect_db() as db:
         response_rows = db.execute(
             """
-            SELECT sr.*, r.ip
+            SELECT sr.*, r.display_name, r.publish_name
             FROM survey_responses sr
             JOIN respondents r ON r.id = sr.respondent_id
             ORDER BY sr.updated_at DESC
@@ -915,26 +1195,35 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         if overall is not None:
             oil_stats[oil_id]["overall"].append(overall)
             oil_stats[oil_id]["overall_by_survey"][survey_id].append(overall)
-            oil_stats[oil_id]["overall_by_ip"].setdefault(row["ip"], []).append(overall)
+            oil_stats[oil_id]["overall_by_respondent"].setdefault(int(row["respondent_id"]), []).append(overall)
 
         bitter = as_float(answers.get("bitter"))
         if bitter is not None and "bitter" in field_lookup.get(survey_id, {}):
             oil_stats[oil_id]["bitter"].append(bitter)
 
+        price_guess = as_float(answers.get("price_guess"))
+        if price_guess is not None and "price_guess" in field_lookup.get(survey_id, {}):
+            oil_stats[oil_id]["price_guess"].append(price_guess)
+            actual_price = as_float(oil.get("actual_price_per_liter_eur"))
+            if actual_price is not None:
+                deviation = price_guess - actual_price
+                oil_stats[oil_id]["price_deviation"].append(deviation)
+
         guess = answers.get("oil_guess")
         if guess:
             oil_stats[oil_id]["guess_total"] += 1
-            if normalize_oil_type(guess) == normalize_oil_type(oil.get("type", "")):
+            if guess_matches_oil(guess, oil):
                 oil_stats[oil_id]["guess_correct"] += 1
 
         comment = str(answers.get("aroma_profile") or "").strip()
-        if comment:
+        if comment and comment.casefold() != "kein kommentar":
             oil_stats[oil_id]["comments"].append(
                 {
                     "survey_id": survey_id,
                     "survey_title": survey.get("short_title", survey.get("title", survey_id)),
-                    "series_label": f"Testreihe {survey_numbers.get(survey_id, '?')}",
+                    "series_label": comment_series_labels.get(survey_id, f"Testreihe {survey_numbers.get(survey_id, '?')}"),
                     "cipher": cipher,
+                    "author": str(row["display_name"] or "").strip() if row["publish_name"] else "",
                     "text": comment,
                     "updated_at": row["updated_at"],
                 }
@@ -943,20 +1232,26 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
     overall_values = {oil_id: average(oil_stats[oil_id]["overall"]) for oil_id in oil_order}
     overall_ranks = rank_map(overall_values, reverse=True)
     spread_values = {oil_id: population_stdev(oil_stats[oil_id]["overall"]) for oil_id in oil_order}
-    spread_ranks = rank_map(spread_values, reverse=True)
+    spread_ranks = rank_map(spread_values, reverse=False)
     own_spread_values: dict[str, float | None] = {}
+    own_spread_distributions: dict[str, list[float]] = {}
     own_spread_counts: dict[str, int] = {}
     for oil_id in oil_order:
         own_spreads = []
-        for values in oil_stats[oil_id]["overall_by_ip"].values():
+        for values in oil_stats[oil_id]["overall_by_respondent"].values():
             spread = population_stdev(values)
             if spread is not None:
                 own_spreads.append(spread)
         own_spread_values[oil_id] = average(own_spreads)
+        own_spread_distributions[oil_id] = own_spreads
         own_spread_counts[oil_id] = len(own_spreads)
-    own_spread_ranks = rank_map(own_spread_values, reverse=True)
+    own_spread_ranks = rank_map(own_spread_values, reverse=False)
     bitter_values = {oil_id: average(oil_stats[oil_id]["bitter"]) for oil_id in oil_order}
-    bitter_ranks = rank_map(bitter_values, reverse=True)
+    bitter_ranks = rank_map(bitter_values, reverse=False)
+    price_guess_values = {oil_id: average(oil_stats[oil_id]["price_guess"]) for oil_id in oil_order}
+    price_guess_ranks = rank_map(price_guess_values, reverse=True)
+    price_deviation_values = {oil_id: average(oil_stats[oil_id]["price_deviation"]) for oil_id in oil_order}
+    price_deviation_ranks = rank_map(price_deviation_values, reverse=True)
     accuracy_values = {
         oil_id: (
             oil_stats[oil_id]["guess_correct"] / oil_stats[oil_id]["guess_total"]
@@ -965,7 +1260,7 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         )
         for oil_id in oil_order
     }
-    accuracy_ranks = rank_map(accuracy_values, reverse=True)
+    accuracy_ranks = rank_map(accuracy_values, reverse=False)
 
     overall_by_survey_values: dict[str, dict[str, float | None]] = {}
     overall_by_survey_ranks: dict[str, dict[str, int | None]] = {}
@@ -975,26 +1270,89 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         overall_by_survey_values[survey_id] = values
         overall_by_survey_ranks[survey_id] = rank_map(values, reverse=True)
 
-    rankings = [
-        ranking_payload("Gesamteindruck gesamt", overall_values, oils, overall_ranks, "Punkte"),
-    ]
+    rankings = []
     for survey in surveys:
         survey_id = survey["id"]
         rankings.append(
             ranking_payload(
-                f"Gesamteindruck: {survey.get('short_title', survey['title'])}",
+                f"Gesamteindruck: Testreihe {survey_numbers.get(survey_id, '?')}",
                 overall_by_survey_values[survey_id],
                 oils,
                 overall_by_survey_ranks[survey_id],
                 "Punkte",
+                survey.get("short_title", survey["title"]),
+                key=f"overall_{survey_id}",
+                color=survey.get("accent"),
+                distributions={
+                    oil_id: oil_stats[oil_id]["overall_by_survey"][survey_id]
+                    for oil_id in oil_order
+                },
             )
         )
+    rankings.append(
+        ranking_payload(
+            "Gesamteindruck gesamt",
+            overall_values,
+            oils,
+            overall_ranks,
+            "Punkte",
+            "Mittel über alle Gesamteindrücke",
+            key="overall_all",
+            color="var(--overall-ranking-color)",
+            distributions={oil_id: oil_stats[oil_id]["overall"] for oil_id in oil_order},
+        )
+    )
     rankings.extend(
         [
-            ranking_payload("eigene Streuung", own_spread_values, oils, own_spread_ranks, "Zahl", "Abweichung derselben IP über Testreihen", key="own_spread"),
-            ranking_payload("Streuung", spread_values, oils, spread_ranks, "σ", "höchste Streuung im Gesamteindruck"),
-            ranking_payload("Bitterkeit", bitter_values, oils, bitter_ranks, "Punkte", "bitterstes Öl zuerst"),
-            ranking_payload("Trefferquote", accuracy_values, oils, accuracy_ranks, "%", "korrekte Öl-Sorte"),
+            ranking_payload(
+                "individuelle Streuung",
+                own_spread_values,
+                oils,
+                own_spread_ranks,
+                "Zahl",
+                "niedrigste Abweichung desselben Probanten über Testreihen zuerst",
+                key="own_spread",
+                distributions=own_spread_distributions,
+            ),
+            ranking_payload(
+                "Streuung",
+                spread_values,
+                oils,
+                spread_ranks,
+                "σ",
+                "niedrigste Streuung im Gesamteindruck zuerst",
+                distributions={oil_id: oil_stats[oil_id]["overall"] for oil_id in oil_order},
+            ),
+            ranking_payload(
+                "Bitterkeit",
+                bitter_values,
+                oils,
+                bitter_ranks,
+                "Punkte",
+                "nicht bitter zuerst",
+                distributions={oil_id: oil_stats[oil_id]["bitter"] for oil_id in oil_order},
+            ),
+            ranking_payload("Trefferquote", accuracy_values, oils, accuracy_ranks, "%", "niedrigste Quote zuerst"),
+            ranking_payload(
+                "Geschätzter Preis",
+                price_guess_values,
+                oils,
+                price_guess_ranks,
+                "€",
+                "höchste Preisschätzung pro Liter zuerst",
+                key="price_guess",
+                distributions={oil_id: oil_stats[oil_id]["price_guess"] for oil_id in oil_order},
+            ),
+            ranking_payload(
+                "Abweichung vom realen Preis",
+                price_deviation_values,
+                oils,
+                price_deviation_ranks,
+                "€±",
+                "höchste Überschätzung zuerst",
+                key="price_deviation",
+                distributions={oil_id: oil_stats[oil_id]["price_deviation"] for oil_id in oil_order},
+            ),
         ]
     )
 
@@ -1017,6 +1375,9 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
                 "id": oil_id,
                 "name": oil["name"],
                 "type": oil.get("type", ""),
+                "is_olive_oil": oil_is_olive_oil(oil),
+                "actual_price_per_liter_eur": oil.get("actual_price_per_liter_eur"),
+                "price_source": oil.get("price_source"),
                 "baseline": bool(oil.get("baseline")),
                 "ciphers": oil.get("ciphers", {}),
                 "response_count": stat["response_count"],
@@ -1035,6 +1396,8 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
                     "rank": own_spread_ranks.get(oil_id),
                 },
                 "bitter": stat_block(stat["bitter"], bitter_ranks.get(oil_id)),
+                "price_guess": stat_block(stat["price_guess"], price_guess_ranks.get(oil_id)),
+                "price_deviation": stat_block(stat["price_deviation"], price_deviation_ranks.get(oil_id)),
                 "guess": {
                     "accuracy": round(stat["guess_correct"] / guess_total, 3) if guess_total else None,
                     "correct": stat["guess_correct"],
@@ -1078,11 +1441,13 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
     server_version = "OilSurvey/2.0"
 
     def log_message(self, format: str, *args: Any) -> None:
-        sys.stdout.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), format % args))
+        sys.stdout.write("- - [%s] %s\n" % (self.log_date_time_string(), format % args))
 
     def do_GET(self) -> None:
         try:
             self.route_get()
+        except ValueError as exc:
+            error_response(self, 400, str(exc))
         except Exception as exc:  # noqa: BLE001 - HTTP boundary
             error_response(self, 500, str(exc))
 
@@ -1104,7 +1469,9 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             decryption = load_decryption(config)
-            send_html(self, 200, render_home(self, config, decryption))
+            respondent = get_or_create_respondent(self)
+            headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
+            send_html(self, 200, render_home(self, config, decryption, respondent), headers)
             return
 
         if path.startswith("/static/"):
@@ -1112,14 +1479,22 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/umfrage/"):
+            decryption = load_decryption(config)
             respondent = get_or_create_respondent(self)
             headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
+            if not respondent.display_name:
+                send_html(self, 200, render_home(self, config, decryption, respondent), headers)
+                return
             survey_id = path.rsplit("/", 1)[-1]
             send_html(self, 200, render_survey_page(survey_id, config), headers)
             return
 
         if path == "/ergebnisse":
             send_html(self, 200, render_results_page(config))
+            return
+
+        if path == "/einzelne-oel-wertungen":
+            send_html(self, 200, render_results_page(config, "oils"))
             return
 
         if path == "/oel-auswahl":
@@ -1134,7 +1509,14 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_json(self, 200, bootstrap_payload(config, decryption, respondent, survey_id), headers)
             return
 
+        if path == "/api/participant":
+            respondent = get_or_create_respondent(self)
+            headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
+            send_json(self, 200, participant_payload(respondent), headers)
+            return
+
         if path == "/api/results":
+            require_results_password(query.get("password", [""])[0])
             decryption = load_decryption(config)
             send_json(self, 200, result_payload(config, decryption))
             return
@@ -1182,6 +1564,15 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_json(self, 200, remove_oil(config, decryption, str(payload.get("oil_id", ""))))
             return
 
+        if path == "/api/oils/update":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, update_oil(config, decryption, payload))
+            return
+
         if path == "/api/oils/clear":
             payload = read_json_body(self)
             if not isinstance(payload, dict):
@@ -1199,6 +1590,14 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             reset_database()
             decryption = load_decryption(config)
             send_json(self, 200, oil_selection_payload(config, decryption))
+            return
+
+        if path == "/api/participant":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            body, headers = save_participant(self, payload)
+            send_json(self, 200, body, headers)
             return
 
         if path == "/api/config":
@@ -1244,18 +1643,16 @@ def run_server(host: str, port: int, open_browser: bool) -> None:
     decryption = load_decryption(config)
     actual_port = find_open_port(host, port)
     server = ThreadingHTTPServer((host, actual_port), OilSurveyHandler)
-    origins = local_origins(actual_port)
+    origin = f"http://localhost:{actual_port}"
 
     print("\nOliven-Symposium läuft.")
-    print("Zum Verteilen im lokalen Netzwerk:")
+    print("Seiten:")
     for survey in public_runtime_config(config, decryption)["surveys"]:
-        print(f"  {survey.get('short_title', survey['id'])}: {origins[0]}/umfrage/{survey['id']}")
-    print(f"  Linktree:   {origins[0]}/")
-    print(f"  Ergebnisse: {origins[0]}/ergebnisse")
-    print(f"  Öl-Auswahl: {origins[0]}/oel-auswahl")
-    print("\nAlle gefundenen Adressen:")
-    for origin in origins:
-        print(f"  {origin}")
+        print(f"  {survey.get('short_title', survey['id'])}: {origin}/umfrage/{survey['id']}")
+    print(f"  Startseite: {origin}/")
+    print(f"  Ergebnisse: {origin}/ergebnisse")
+    print(f"  Aufschlüsselung je Öl: {origin}/einzelne-oel-wertungen")
+    print(f"  Öl-Auswahl: {origin}/oel-auswahl")
     print("\nBeenden mit Strg+C.\n")
 
     if open_browser:
