@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
 import mimetypes
 import os
 import re
@@ -26,6 +27,7 @@ DATA_DIR = ROOT / "data"
 DB_PATH = Path(os.environ.get("UMFRAGEN_DB", str(DATA_DIR / "umfragen.sqlite3")))
 CONFIG_PATH = ROOT / "event_config.json"
 DECRYPTION_PATH = ROOT / "decryption.json"
+TEXTS_PATH = ROOT / "ui_texts.json"
 STATIC_DIR = ROOT / "static"
 COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
@@ -73,6 +75,42 @@ def load_decryption(config: dict[str, Any]) -> dict[str, Any]:
     decryption = load_json_file(DECRYPTION_PATH)
     validate_decryption(config, decryption)
     return decryption
+
+
+def load_texts() -> dict[str, Any]:
+    if not TEXTS_PATH.exists():
+        return {}
+    texts = load_json_file(TEXTS_PATH)
+    return texts
+
+
+def text_at(texts: dict[str, Any], path: tuple[str, ...], fallback: str = "") -> str:
+    node: Any = texts
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return fallback
+        node = node[key]
+    return node if isinstance(node, str) else fallback
+
+
+def dict_at(texts: dict[str, Any], path: tuple[str, ...]) -> dict[str, Any]:
+    node: Any = texts
+    for key in path:
+        if not isinstance(node, dict):
+            return {}
+        node = node.get(key)
+    return node if isinstance(node, dict) else {}
+
+
+def format_text(template: str, **values: Any) -> str:
+    result = template
+    for key, value in values.items():
+        result = result.replace("{" + key + "}", str(value))
+    return result
+
+
+def route_text(texts: dict[str, Any], route: str, key: str, fallback: str = "") -> str:
+    return text_at(texts, (route, key), fallback)
 
 
 def validate_config(config: dict[str, Any]) -> None:
@@ -163,17 +201,28 @@ def survey_samples(config: dict[str, Any], decryption: dict[str, Any], survey: d
 
 
 def public_runtime_config(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    texts = load_texts()
     max_price = max_actual_price(decryption)
     surveys = []
     for survey in config["surveys"]:
         item = dict(survey)
+        survey_texts = dict_at(texts, ("/umfrage/:id", "surveys", str(survey["id"])))
+        if survey_texts:
+            for key in ("title", "short_title", "series_label"):
+                if isinstance(survey_texts.get(key), str):
+                    item[key] = survey_texts[key]
         fields = []
         for field in survey.get("fields", []):
             field_item = dict(field)
+            field_texts = dict_at(survey_texts, ("fields", str(field["id"])))
+            for key in ("label", "summary_label", "placeholder", "left_label", "mid_label", "right_label", "yes_value", "no_value"):
+                if isinstance(field_texts.get(key), str):
+                    field_item[key] = field_texts[key]
             if field_item.get("id") == "price_guess":
                 minimum = field_item.get("min", 1)
                 field_item["max"] = max_price
                 field_item["right_label"] = f"{max_price} €"
+                field_item["tick_min"] = 0
                 field_item["default"] = minimum
             fields.append(field_item)
         item["fields"] = fields
@@ -192,7 +241,7 @@ def max_actual_price(decryption: dict[str, Any]) -> int:
         for oil in active_oils(decryption)
         if as_float(oil.get("actual_price_per_liter_eur")) is not None
     ]
-    return max(1, round(max(prices))) if prices else 50
+    return max(5, int(math.ceil(max(prices) / 5) * 5)) if prices else 50
 
 
 def cipher_to_oil(config: dict[str, Any], decryption: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -427,7 +476,7 @@ def init_db() -> None:
                 ip TEXT NOT NULL,
                 user_agent TEXT NOT NULL,
                 display_name TEXT,
-                publish_name INTEGER NOT NULL DEFAULT 0,
+                publish_name INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -455,7 +504,7 @@ def init_db() -> None:
         )
         columns = {row["name"] for row in db.execute("PRAGMA table_info(respondents)").fetchall()}
         if "publish_name" not in columns:
-            db.execute("ALTER TABLE respondents ADD COLUMN publish_name INTEGER NOT NULL DEFAULT 0")
+            db.execute("ALTER TABLE respondents ADD COLUMN publish_name INTEGER NOT NULL DEFAULT 1")
         db.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_respondents_display_name
@@ -510,10 +559,10 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
             token = uuid.uuid4().hex
             db.execute(
                 """
-                INSERT INTO respondents (token, ip, user_agent, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO respondents (token, ip, user_agent, publish_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (token, ip, user_agent, timestamp, timestamp),
+                (token, ip, user_agent, 1, timestamp, timestamp),
             )
             row = db.execute("SELECT * FROM respondents WHERE token = ?", (token,)).fetchone()
             is_new_cookie = True
@@ -530,7 +579,7 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
         ip=str(row["ip"]),
         user_agent=str(row["user_agent"]),
         display_name=str(row["display_name"]) if row["display_name"] else None,
-        publish_name=bool(row["publish_name"]) if "publish_name" in row.keys() else False,
+        publish_name=bool(row["publish_name"]) if "publish_name" in row.keys() else True,
         is_new_cookie=is_new_cookie,
     )
 
@@ -540,7 +589,7 @@ def participant_payload(respondent: Respondent) -> dict[str, Any]:
         "ok": True,
         "participant": {
             "display_name": respondent.display_name or "",
-            "publish_name": respondent.publish_name,
+            "publish_name": respondent.publish_name if respondent.display_name else True,
         },
     }
 
@@ -692,8 +741,14 @@ def send_html(
     send_bytes(handler, status, markup.encode("utf-8"), "text/html; charset=utf-8", extra_headers)
 
 
+def inline_json_script(name: str, payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    return f"<script>window.{name} = {encoded};</script>"
+
+
 def page_shell(title: str, body: str, scripts: str = "", head_extra: str = "") -> str:
     escaped_title = html.escape(title)
+    texts_script = inline_json_script("UI_TEXTS", load_texts())
     return f"""<!doctype html>
 <html lang="de">
 <head>
@@ -706,6 +761,7 @@ def page_shell(title: str, body: str, scripts: str = "", head_extra: str = "") -
 </head>
 <body>
   {body}
+  {texts_script}
   {scripts}
 </body>
 </html>"""
@@ -756,7 +812,9 @@ def host_score(host: str) -> tuple[int, str]:
 
 
 def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decryption: dict[str, Any], respondent: Respondent) -> str:
+    texts = load_texts()
     can_open_surveys = bool(respondent.display_name)
+    publish_checked = respondent.publish_name if respondent.display_name else True
     survey_cards = []
     for survey in public_runtime_config(config, decryption)["surveys"]:
         href = f"/umfrage/{survey['id']}"
@@ -766,33 +824,55 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
             f"""
             <article class="link-card" style="--accent:{html.escape(survey.get('accent', '#277c61'))}">
               <div>
-                <p class="eyebrow">{html.escape(survey.get('short_title', 'Testreihe'))}</p>
+                <p class="eyebrow">{html.escape(survey.get('short_title', route_text(texts, '/', 'survey_fallback_eyebrow', 'Testreihe')))}</p>
                 <h2>{html.escape(survey.get('title', survey['id']))}</h2>
               </div>
-              <a class="{link_class}" href="{html.escape(href)}" aria-disabled="{aria_disabled}">Öffnen</a>
+              <a class="{link_class}" href="{html.escape(href)}" aria-disabled="{aria_disabled}">{html.escape(text_at(texts, ('global', 'open_button'), 'Öffnen'))}</a>
             </article>
             """
         )
 
+    page_title = route_text(texts, "/", "page_title", "Studie des Oliven-Symposiums")
     return page_shell(
-        "Studie des Oliven-Symposiums",
+        page_title,
         f"""
         <main id="home-app" class="page">
           <section class="topbar">
             <div>
-              <h1>Studie des Oliven-Symposiums</h1>
+              <h1>{html.escape(route_text(texts, '/', 'heading', page_title))}</h1>
             </div>
           </section>
 
           <section class="setup-editor participant-panel">
+            <div class="participant-panel-heading">
+              <h2>{html.escape(route_text(texts, '/', 'registration_title', 'Anmeldung'))}</h2>
+              <div class="participant-info">
+                <button
+                  id="participant-info-button"
+                  class="info-button"
+                  type="button"
+                  aria-expanded="false"
+                  aria-label="{html.escape(route_text(texts, '/', 'participant_info_label', 'Hinweis zur Anmeldung'))}"
+                >{html.escape(route_text(texts, '/', 'participant_info_button', 'i'))}</button>
+                <div id="participant-info-popover" class="info-popover" role="status">
+                  {html.escape(route_text(texts, '/', 'participant_info', ''))}
+                </div>
+              </div>
+            </div>
             <div class="participant-form">
-              <label>
-                Name
-                <input id="participant-name" type="text" maxlength="80" autocomplete="name" placeholder="Name eingeben">
+              <label class="participant-name-field">
+                <input
+                  id="participant-name"
+                  type="text"
+                  maxlength="80"
+                  autocomplete="name"
+                  aria-label="{html.escape(route_text(texts, '/', 'participant_name_label', 'Name'))}"
+                  placeholder="{html.escape(route_text(texts, '/', 'participant_name_placeholder', 'Name eingeben'))}"
+                >
               </label>
               <label class="check-option publish-option">
-                <input id="participant-publish" type="checkbox">
-                <span>Name bei Aromaprofil-Kommentaren veröffentlichen</span>
+                <input id="participant-publish" type="checkbox" {"checked" if publish_checked else ""}>
+                <span>{html.escape(route_text(texts, '/', 'publish_label', 'Name bei Aromaprofil-Kommentaren veröffentlichen'))}</span>
               </label>
             </div>
             <p class="notice" id="participant-state"> </p>
@@ -801,10 +881,10 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
           <section class="link-grid result-link-grid">
             <article class="link-card result-link-card" style="--accent:#f3f5f7;--accent-contrast:#111827;--accent-hover-contrast:#111827">
               <div>
-                <p class="eyebrow">Live-Auswertung</p>
-                <h2>Ergebnisse</h2>
+                <p class="eyebrow">{html.escape(route_text(texts, '/', 'results_eyebrow', 'Live-Auswertung'))}</p>
+                <h2>{html.escape(route_text(texts, '/', 'results_title', 'Ergebnisse'))}</h2>
               </div>
-              <a class="primary-link" href="/ergebnisse">Öffnen</a>
+              <a class="primary-link" href="/ergebnisse">{html.escape(text_at(texts, ('global', 'open_button'), 'Öffnen'))}</a>
             </article>
           </section>
 
@@ -813,7 +893,7 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
           </section>
 
           <section class="admin-link-section">
-            <a class="ghost-button" href="/oel-auswahl">Öl-Auswahl</a>
+            <a class="ghost-button" href="/oel-auswahl">{html.escape(route_text(texts, '/', 'admin_link', 'Öl-Auswahl'))}</a>
           </section>
         </main>
         """,
@@ -822,16 +902,20 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
 
 
 def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
+    texts = load_texts()
     survey = survey_by_id(config, survey_id)
     if not survey:
-        return page_shell("Nicht gefunden", "<main class='page narrow'><h1>Diese Umfrage gibt es nicht.</h1></main>")
+        missing = route_text(texts, "/umfrage/:id", "missing", "Diese Umfrage gibt es nicht.")
+        return page_shell("Nicht gefunden", f"<main class='page narrow'><h1>{html.escape(missing)}</h1></main>")
 
-    title = f"{survey.get('short_title', survey.get('title', survey_id))} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
+    survey_texts = dict_at(texts, ("/umfrage/:id", "surveys", survey_id))
+    visible_title = survey_texts.get("short_title") or survey_texts.get("title") or survey.get("short_title") or survey.get("title") or survey_id
+    title = f"{visible_title} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
     return page_shell(
         title,
-        """
+        f"""
         <main id="survey-app" class="page survey-page">
-          <div class="loading-panel">Umfrage wird geladen...</div>
+          <div class="loading-panel">{html.escape(route_text(texts, "/umfrage/:id", "loading", "Umfrage wird geladen..."))}</div>
         </main>
         """,
         f"""
@@ -842,13 +926,15 @@ def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
 
 
 def render_results_page(config: dict[str, Any], mode: str = "rankings") -> str:
-    page_title = "Aufschlüsselung je Öl" if mode == "oils" else "Ergebnisse"
+    texts = load_texts()
+    route = "/einzelne-oel-wertungen" if mode == "oils" else "/ergebnisse"
+    page_title = route_text(texts, route, "page_title", "Aufschlüsselung je Öl" if mode == "oils" else "Ergebnisse")
     title = f"{page_title} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
     return page_shell(
         title,
-        """
+        f"""
         <main id="results-app" class="page results-page">
-          <div class="loading-panel">Ergebnisse werden geladen...</div>
+          <div class="loading-panel">{html.escape(route_text(texts, route, "loading", "Ergebnisse werden geladen..."))}</div>
         </main>
         """,
         f"""
@@ -859,12 +945,14 @@ def render_results_page(config: dict[str, Any], mode: str = "rankings") -> str:
 
 
 def render_oil_selection_page(config: dict[str, Any]) -> str:
-    title = f"Öl-Auswahl · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
+    texts = load_texts()
+    page_title = route_text(texts, "/oel-auswahl", "page_title", "Öl-Auswahl")
+    title = f"{page_title} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
     return page_shell(
         title,
-        """
+        f"""
         <main id="oil-selection-app" class="page oil-selection-page">
-          <div class="loading-panel">Öl-Auswahl wird geladen...</div>
+          <div class="loading-panel">{html.escape(route_text(texts, "/oel-auswahl", "loading", "Öl-Auswahl wird geladen..."))}</div>
         </main>
         """,
         '<script src="/static/oils.js" defer></script>',
@@ -1036,22 +1124,40 @@ def guess_matches_oil(guess: Any, oil: dict[str, Any]) -> bool:
     return normalize_oil_type(guess) == normalize_oil_type(oil.get("type", ""))
 
 
-def rank_map(values: dict[str, float | None], reverse: bool = True) -> dict[str, int | None]:
+def rank_sort_key(
+    oil_id: str,
+    value: float,
+    reverse: bool,
+    distributions: dict[str, list[float]] | None = None,
+) -> tuple[float, float, float, str]:
+    samples = (distributions or {}).get(oil_id, [])
+    med = median(samples)
+    spread = population_stdev(samples)
+    oriented_value = -value if reverse else value
+    oriented_median = -(med if med is not None else value) if reverse else (med if med is not None else value)
+    return (oriented_value, oriented_median, spread if spread is not None else 0, oil_id)
+
+
+def rank_map(
+    values: dict[str, float | None],
+    reverse: bool = True,
+    distributions: dict[str, list[float]] | None = None,
+) -> dict[str, int | None]:
     ranked = sorted(
         ((oil_id, value) for oil_id, value in values.items() if value is not None),
-        key=lambda item: item[1],
-        reverse=reverse,
+        key=lambda item: rank_sort_key(item[0], item[1], reverse, distributions),
     )
     ranks: dict[str, int | None] = {oil_id: None for oil_id in values}
-    previous_value: float | None = None
+    previous_key: tuple[float, float, float] | None = None
     previous_rank = 0
     for index, (oil_id, value) in enumerate(ranked, start=1):
-        if previous_value is not None and value == previous_value:
+        current_key = rank_sort_key(oil_id, value, reverse, distributions)[:3]
+        if previous_key is not None and current_key == previous_key:
             rank = previous_rank
         else:
             rank = index
             previous_rank = rank
-            previous_value = value
+            previous_key = current_key
         ranks[oil_id] = rank
     return ranks
 
@@ -1131,6 +1237,9 @@ def ranking_payload(
 
 
 def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    texts = load_texts()
+    ranking_texts = dict_at(texts, ("/ergebnisse", "rankings"))
+    no_comment_value = text_at(texts, ("/umfrage/:id", "no_comment_value"), "kein Kommentar").casefold()
     oils = active_oils(decryption)
     oil_order = [oil["id"] for oil in oils]
     oil_lookup = slug_lookup(oils)
@@ -1138,9 +1247,8 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
     survey_lookup = slug_lookup(surveys)
     survey_numbers = {survey["id"]: index + 1 for index, survey in enumerate(surveys)}
     comment_series_labels = {
-        "geschmack": "Geschmack",
-        "geruch": "Geruch",
-        "gesamt": "gesamt",
+        survey["id"]: survey.get("series_label") or survey.get("short_title") or survey.get("title") or f"Testreihe {survey_numbers.get(survey['id'], '?')}"
+        for survey in surveys
     }
     field_lookup = {
         survey["id"]: {field["id"]: field for field in survey.get("fields", [])}
@@ -1157,6 +1265,7 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
             "bitter": [],
             "price_guess": [],
             "price_deviation": [],
+            "price_deviation_percent": [],
             "guess_correct": 0,
             "guess_total": 0,
             "response_count": 0,
@@ -1208,6 +1317,8 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
             if actual_price is not None:
                 deviation = price_guess - actual_price
                 oil_stats[oil_id]["price_deviation"].append(deviation)
+                if actual_price > 0:
+                    oil_stats[oil_id]["price_deviation_percent"].append((deviation / actual_price) * 100)
 
         guess = answers.get("oil_guess")
         if guess:
@@ -1216,7 +1327,7 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
                 oil_stats[oil_id]["guess_correct"] += 1
 
         comment = str(answers.get("aroma_profile") or "").strip()
-        if comment and comment.casefold() != "kein kommentar":
+        if comment and comment.casefold() != no_comment_value:
             oil_stats[oil_id]["comments"].append(
                 {
                     "survey_id": survey_id,
@@ -1229,10 +1340,11 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
                 }
             )
 
-    overall_values = {oil_id: average(oil_stats[oil_id]["overall"]) for oil_id in oil_order}
-    overall_ranks = rank_map(overall_values, reverse=True)
+    overall_distributions = {oil_id: oil_stats[oil_id]["overall"] for oil_id in oil_order}
+    overall_values = {oil_id: average(overall_distributions[oil_id]) for oil_id in oil_order}
+    overall_ranks = rank_map(overall_values, reverse=True, distributions=overall_distributions)
     spread_values = {oil_id: population_stdev(oil_stats[oil_id]["overall"]) for oil_id in oil_order}
-    spread_ranks = rank_map(spread_values, reverse=False)
+    spread_ranks = rank_map(spread_values, reverse=False, distributions=overall_distributions)
     own_spread_values: dict[str, float | None] = {}
     own_spread_distributions: dict[str, list[float]] = {}
     own_spread_counts: dict[str, int] = {}
@@ -1245,13 +1357,22 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         own_spread_values[oil_id] = average(own_spreads)
         own_spread_distributions[oil_id] = own_spreads
         own_spread_counts[oil_id] = len(own_spreads)
-    own_spread_ranks = rank_map(own_spread_values, reverse=False)
+    own_spread_ranks = rank_map(own_spread_values, reverse=False, distributions=own_spread_distributions)
     bitter_values = {oil_id: average(oil_stats[oil_id]["bitter"]) for oil_id in oil_order}
-    bitter_ranks = rank_map(bitter_values, reverse=False)
+    bitter_distributions = {oil_id: oil_stats[oil_id]["bitter"] for oil_id in oil_order}
+    bitter_ranks = rank_map(bitter_values, reverse=False, distributions=bitter_distributions)
     price_guess_values = {oil_id: average(oil_stats[oil_id]["price_guess"]) for oil_id in oil_order}
-    price_guess_ranks = rank_map(price_guess_values, reverse=True)
+    price_guess_distributions = {oil_id: oil_stats[oil_id]["price_guess"] for oil_id in oil_order}
+    price_guess_ranks = rank_map(price_guess_values, reverse=True, distributions=price_guess_distributions)
     price_deviation_values = {oil_id: average(oil_stats[oil_id]["price_deviation"]) for oil_id in oil_order}
-    price_deviation_ranks = rank_map(price_deviation_values, reverse=True)
+    price_deviation_distributions = {oil_id: oil_stats[oil_id]["price_deviation"] for oil_id in oil_order}
+    price_deviation_percent_values = {oil_id: average(oil_stats[oil_id]["price_deviation_percent"]) for oil_id in oil_order}
+    price_deviation_percent_distributions = {oil_id: oil_stats[oil_id]["price_deviation_percent"] for oil_id in oil_order}
+    price_deviation_ranks = rank_map(
+        price_deviation_percent_values,
+        reverse=True,
+        distributions=price_deviation_percent_distributions,
+    )
     accuracy_values = {
         oil_id: (
             oil_stats[oil_id]["guess_correct"] / oil_stats[oil_id]["guess_total"]
@@ -1266,16 +1387,18 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
     overall_by_survey_ranks: dict[str, dict[str, int | None]] = {}
     for survey in surveys:
         survey_id = survey["id"]
-        values = {oil_id: average(oil_stats[oil_id]["overall_by_survey"][survey_id]) for oil_id in oil_order}
+        distributions = {oil_id: oil_stats[oil_id]["overall_by_survey"][survey_id] for oil_id in oil_order}
+        values = {oil_id: average(distributions[oil_id]) for oil_id in oil_order}
         overall_by_survey_values[survey_id] = values
-        overall_by_survey_ranks[survey_id] = rank_map(values, reverse=True)
+        overall_by_survey_ranks[survey_id] = rank_map(values, reverse=True, distributions=distributions)
 
     rankings = []
     for survey in surveys:
         survey_id = survey["id"]
+        series = comment_series_labels.get(survey_id, f"Testreihe {survey_numbers.get(survey_id, '?')}")
         rankings.append(
             ranking_payload(
-                f"Gesamteindruck: Testreihe {survey_numbers.get(survey_id, '?')}",
+                format_text(ranking_texts.get("overall_survey_title", "Gesamteindruck: {series}"), series=series),
                 overall_by_survey_values[survey_id],
                 oils,
                 overall_by_survey_ranks[survey_id],
@@ -1291,68 +1414,117 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         )
     rankings.append(
         ranking_payload(
-            "Gesamteindruck gesamt",
+            ranking_texts.get("overall_all_title", "Gesamteindruck gesamt"),
             overall_values,
             oils,
             overall_ranks,
             "Punkte",
-            "Mittel über alle Gesamteindrücke",
+            ranking_texts.get("overall_all_subtitle", "Mittel über alle Gesamteindrücke"),
             key="overall_all",
             color="var(--overall-ranking-color)",
-            distributions={oil_id: oil_stats[oil_id]["overall"] for oil_id in oil_order},
+            distributions=overall_distributions,
         )
     )
+    price_deviation_ranking = ranking_payload(
+        ranking_texts.get("price_deviation_title", "Abweichung vom realen Preis"),
+        price_deviation_percent_values,
+        oils,
+        price_deviation_ranks,
+        "%±",
+        ranking_texts.get("price_deviation_subtitle", "höchste Überschätzung zuerst"),
+        key="price_deviation",
+        distributions=price_deviation_percent_distributions,
+    )
+    price_domain_max = max_actual_price(decryption)
+    price_deviation_ranking["graph"] = "price_deviation"
+    price_scatter_values = [price_domain_max]
+    for item in price_deviation_ranking["items"]:
+        actual = as_float(oil_lookup[item["oil_id"]].get("actual_price_per_liter_eur"))
+        guess_avg = price_guess_values.get(item["oil_id"])
+        item["actual_price_per_liter_eur"] = round(actual, 2) if actual is not None else None
+        item["price_guess_avg"] = round(guess_avg, 2) if guess_avg is not None else None
+        deviation = price_deviation_values.get(item["oil_id"])
+        item["price_deviation_eur"] = round(deviation, 2) if deviation is not None else None
+        percent = price_deviation_percent_values.get(item["oil_id"])
+        item["price_deviation_percent"] = round(percent, 2) if percent is not None else None
+        if actual is not None:
+            price_scatter_values.append(actual)
+        if guess_avg is not None:
+            price_scatter_values.append(guess_avg)
+
+    price_scatter_max = max(5, int(math.ceil(max(price_scatter_values) / 5) * 5)) if price_scatter_values else price_domain_max
+    price_deviation_ranking["price_domain"] = {"min": 0, "max": price_scatter_max}
+    price_scatter_points = []
+    for oil in oils:
+        oil_id = oil["id"]
+        actual = as_float(oil.get("actual_price_per_liter_eur"))
+        guess_avg = price_guess_values.get(oil_id)
+        if actual is None or actual <= 0 or guess_avg is None:
+            continue
+        price_scatter_points.append(
+            {
+                "oil_id": oil_id,
+                "name": oil["name"],
+                "actual_price_per_liter_eur": round(actual, 2),
+                "price_guess_avg": round(guess_avg, 2),
+                "price_deviation": round(guess_avg - actual, 2),
+                "price_deviation_percent": round(((guess_avg - actual) / actual) * 100, 2),
+                "rank": price_deviation_ranks.get(oil_id),
+            }
+        )
+
     rankings.extend(
         [
             ranking_payload(
-                "individuelle Streuung",
-                own_spread_values,
-                oils,
-                own_spread_ranks,
-                "Zahl",
-                "niedrigste Abweichung desselben Probanten über Testreihen zuerst",
-                key="own_spread",
-                distributions=own_spread_distributions,
-            ),
-            ranking_payload(
-                "Streuung",
+                ranking_texts.get("spread_title", "Streuung"),
                 spread_values,
                 oils,
                 spread_ranks,
                 "σ",
-                "niedrigste Streuung im Gesamteindruck zuerst",
+                ranking_texts.get("spread_subtitle", "niedrigste Streuung im Gesamteindruck zuerst"),
+                key="spread",
                 distributions={oil_id: oil_stats[oil_id]["overall"] for oil_id in oil_order},
             ),
             ranking_payload(
-                "Bitterkeit",
+                ranking_texts.get("own_spread_title", "individuelle Streuung"),
+                own_spread_values,
+                oils,
+                own_spread_ranks,
+                "Zahl",
+                ranking_texts.get("own_spread_subtitle", "niedrigste Abweichung desselben Probanden über Testreihen zuerst"),
+                key="own_spread",
+                distributions=own_spread_distributions,
+            ),
+            ranking_payload(
+                ranking_texts.get("accuracy_title", "Trefferquote"),
+                accuracy_values,
+                oils,
+                accuracy_ranks,
+                "%",
+                ranking_texts.get("accuracy_subtitle", "niedrigste Quote zuerst"),
+                key="guess_accuracy",
+            ),
+            ranking_payload(
+                ranking_texts.get("bitter_title", "Bitterkeit"),
                 bitter_values,
                 oils,
                 bitter_ranks,
                 "Punkte",
-                "nicht bitter zuerst",
-                distributions={oil_id: oil_stats[oil_id]["bitter"] for oil_id in oil_order},
+                ranking_texts.get("bitter_subtitle", "nicht bitter zuerst"),
+                key="bitter",
+                distributions=bitter_distributions,
             ),
-            ranking_payload("Trefferquote", accuracy_values, oils, accuracy_ranks, "%", "niedrigste Quote zuerst"),
             ranking_payload(
-                "Geschätzter Preis",
+                ranking_texts.get("price_guess_title", "Geschätzter Preis"),
                 price_guess_values,
                 oils,
                 price_guess_ranks,
                 "€",
-                "höchste Preisschätzung pro Liter zuerst",
+                ranking_texts.get("price_guess_subtitle", "höchste Preisschätzung pro Liter zuerst"),
                 key="price_guess",
-                distributions={oil_id: oil_stats[oil_id]["price_guess"] for oil_id in oil_order},
+                distributions=price_guess_distributions,
             ),
-            ranking_payload(
-                "Abweichung vom realen Preis",
-                price_deviation_values,
-                oils,
-                price_deviation_ranks,
-                "€±",
-                "höchste Überschätzung zuerst",
-                key="price_deviation",
-                distributions={oil_id: oil_stats[oil_id]["price_deviation"] for oil_id in oil_order},
-            ),
+            price_deviation_ranking,
         ]
     )
 
@@ -1397,7 +1569,10 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
                 },
                 "bitter": stat_block(stat["bitter"], bitter_ranks.get(oil_id)),
                 "price_guess": stat_block(stat["price_guess"], price_guess_ranks.get(oil_id)),
-                "price_deviation": stat_block(stat["price_deviation"], price_deviation_ranks.get(oil_id)),
+                "price_deviation": {
+                    **stat_block(stat["price_deviation_percent"], price_deviation_ranks.get(oil_id)),
+                    "eur_avg": round(price_deviation_values[oil_id], 2) if price_deviation_values[oil_id] is not None else None,
+                },
                 "guess": {
                     "accuracy": round(stat["guess_correct"] / guess_total, 3) if guess_total else None,
                     "correct": stat["guess_correct"],
@@ -1432,6 +1607,10 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
             "updated_at": response_rows[0]["updated_at"] if response_rows else None,
         },
         "rankings": rankings,
+        "price_scatter": {
+            "domain": {"min": 0, "max": price_scatter_max},
+            "points": price_scatter_points,
+        },
         "oils": oil_payload,
         "server_time": now_iso(),
     }

@@ -1,12 +1,32 @@
 const homeApp = document.getElementById("home-app");
 const AUTOSAVE_DELAY = 450;
+const INFO_SEEN_PREFIX = "oil_tasting_registration_info_seen:";
 let saveTimer = null;
+
+function text(path, fallback = "") {
+  let node = window.UI_TEXTS || {};
+  for (const key of path) {
+    if (!node || typeof node !== "object" || !(key in node)) return fallback;
+    node = node[key];
+  }
+  return typeof node === "string" ? node : fallback;
+}
+
+function globalText(key, fallback = "") {
+  return text(["global", key], fallback);
+}
+
+function homeText(key, fallback = "") {
+  return text(["/", key], fallback);
+}
 
 function participantElements() {
   return {
     name: document.getElementById("participant-name"),
     publish: document.getElementById("participant-publish"),
     state: document.getElementById("participant-state"),
+    infoButton: document.getElementById("participant-info-button"),
+    infoPopover: document.getElementById("participant-info-popover"),
   };
 }
 
@@ -29,14 +49,15 @@ function updateSurveyAccess(displayName) {
 async function loadParticipant() {
   const response = await fetch("/api/participant", { credentials: "same-origin" });
   const payload = await response.json();
-  if (!payload.ok) throw new Error(payload.error || "Name konnte nicht geladen werden.");
+  if (!payload.ok) throw new Error(payload.error || homeText("participant_load_failed", "Name konnte nicht geladen werden."));
 
   const elements = participantElements();
   if (elements.name) elements.name.value = payload.participant.display_name || "";
   if (elements.publish) elements.publish.checked = Boolean(payload.participant.publish_name);
 
   const hasName = updateSurveyAccess(payload.participant.display_name);
-  setParticipantState(hasName ? "gespeichert" : "Bitte Namen eingeben, um die Umfragen zu öffnen.");
+  setParticipantState(hasName ? globalText("saved", "gespeichert") : homeText("participant_need_name", "Bitte Namen eingeben, um die Umfragen zu öffnen."));
+  updateInfoPulse();
 }
 
 async function saveParticipant() {
@@ -52,13 +73,14 @@ async function saveParticipant() {
     }),
   });
   const payload = await response.json();
-  if (!payload.ok) throw new Error(payload.error || "Name konnte nicht gespeichert werden.");
+  if (!payload.ok) throw new Error(payload.error || homeText("participant_save_failed", "Name konnte nicht gespeichert werden."));
 
   if (elements.name) elements.name.value = payload.participant.display_name || "";
   if (elements.publish) elements.publish.checked = Boolean(payload.participant.publish_name);
 
   const hasName = updateSurveyAccess(payload.participant.display_name);
-  setParticipantState(hasName ? "gespeichert" : "Bitte Namen eingeben, um die Umfragen zu öffnen.");
+  setParticipantState(hasName ? globalText("saved", "gespeichert") : homeText("participant_need_name", "Bitte Namen eingeben, um die Umfragen zu öffnen."));
+  updateInfoPulse();
 }
 
 function scheduleParticipantSave(delay = AUTOSAVE_DELAY) {
@@ -67,9 +89,9 @@ function scheduleParticipantSave(delay = AUTOSAVE_DELAY) {
 
   if (!String(elements.name?.value || "").trim()) {
     updateSurveyAccess("");
-    setParticipantState("Bitte Namen eingeben, um die Umfragen zu öffnen.");
+    setParticipantState(homeText("participant_need_name", "Bitte Namen eingeben, um die Umfragen zu öffnen."));
   } else {
-    setParticipantState("speichert...");
+    setParticipantState(globalText("saving", "speichert..."));
   }
 
   saveTimer = setTimeout(() => {
@@ -77,18 +99,62 @@ function scheduleParticipantSave(delay = AUTOSAVE_DELAY) {
   }, delay);
 }
 
+function normalizedName() {
+  return String(participantElements().name?.value || "").trim().toLocaleLowerCase("de-DE");
+}
+
+function infoSeenKey() {
+  const name = normalizedName();
+  return name ? `${INFO_SEEN_PREFIX}${name}` : "";
+}
+
+function updateInfoPulse() {
+  const { infoButton } = participantElements();
+  if (!infoButton) return;
+  const key = infoSeenKey();
+  const seen = key ? window.localStorage?.getItem(key) === "1" : false;
+  infoButton.classList.toggle("needs-attention", !seen);
+}
+
+function closeInfoPopover() {
+  const elements = participantElements();
+  elements.infoButton?.setAttribute("aria-expanded", "false");
+  elements.infoPopover?.classList.remove("open");
+}
+
 homeApp?.addEventListener("click", (event) => {
+  const infoButton = event.target.closest("#participant-info-button");
+  if (infoButton) {
+    const elements = participantElements();
+    const expanded = infoButton.getAttribute("aria-expanded") === "true";
+    infoButton.setAttribute("aria-expanded", expanded ? "false" : "true");
+    elements.infoPopover?.classList.toggle("open", !expanded);
+
+    const key = infoSeenKey();
+    if (key) {
+      window.localStorage?.setItem(key, "1");
+      updateInfoPulse();
+    }
+    return;
+  }
+
   const lockedSurvey = event.target.closest(".survey-entry-link.locked-link");
   if (!lockedSurvey) return;
 
   event.preventDefault();
-  setParticipantState("Bitte zuerst einen Namen eingeben.", true);
+  setParticipantState(homeText("participant_locked", "Bitte zuerst einen Namen eingeben."), true);
   participantElements().name?.focus();
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".participant-info")) return;
+  closeInfoPopover();
 });
 
 homeApp?.addEventListener("input", (event) => {
   if (event.target?.id !== "participant-name") return;
   scheduleParticipantSave();
+  updateInfoPulse();
 });
 
 homeApp?.addEventListener("change", (event) => {
@@ -105,4 +171,5 @@ homeApp?.addEventListener("keydown", (event) => {
 
 loadParticipant().catch((error) => {
   setParticipantState(error.message, true);
+  updateInfoPulse();
 });

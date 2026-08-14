@@ -1,0 +1,240 @@
+{
+  "global": {
+    "home_button": "zurück zur Startseite",
+    "open_button": "Starten",
+    "password_label": "Passwort",
+    "login_button": "Öffnen",
+    "open_value": "offen",
+    "saved": "gespeichert",
+    "saving": "speichert...",
+    "not_saved": "noch nicht gespeichert",
+    "save_error": "Fehler beim Speichern",
+    "error_prefix": "Fehler",
+    "possible_suffix": "möglich"
+  },
+  "/": {
+    "page_title": "Oliven-Symposium",
+    "heading": "Olivenöl-Verkostung mit wissenschaftlichen Standards",
+    "registration_title": "Anmeldung",
+    "participant_name_label": "Name",
+    "participant_name_placeholder": "Name eingeben",
+    "participant_info_label": "Hinweis zur Anmeldung",
+    "participant_info_button": "i",
+    "participant_info": "Deine Antworten werden unter deinem Namen im System gespeichert und mit deinem Gerät verknüpft. Du kannst deine Angaben jederzeit hier ändern und daraufhin nahtlos bei deinen Wertungen weitermachen.",
+    "publish_label": "Name bei Freitextbewertungen veröffentlichen",
+    "participant_load_failed": "Name konnte nicht geladen werden.",
+    "participant_save_failed": "Name konnte nicht gespeichert werden.",
+    "participant_need_name": "Bitte Namen eingeben, um die Umfragen zu starten.",
+    "participant_locked": "Du musst einen Namen wählen.",
+    "results_eyebrow": "automatische Auswertung aller Bewertungen",
+    "results_title": "Ergebnisse",
+    "admin_link": "Konfiguration der Olivenöl-Auswahl",
+    "survey_fallback_eyebrow": "Testreihe"
+  },
+  "/umfrage/:id": {
+    "loading": "Umfrage wird geladen...",
+    "missing": "Diese Umfrage gibt es nicht.",
+    "select_placeholder": "Auswählen",
+    "yes_label": "Ja",
+    "no_label": "Nein",
+    "participant_anonymous": "anonym",
+    "sheet_label": "Wertungsbogen Nr.",
+    "complete": "fertig",
+    "incomplete": "offen",
+    "no_comment_button": "kein Kommentar",
+    "no_comment_value": "kein Kommentar",
+    "survey_load_failed": "Umfrage konnte nicht geladen werden.",
+    "participant_required": "Bitte zuerst einen Namen auf der Startseite speichern.",
+    "surveys": {
+      "geschmack": {
+        "title": "Testreihe 1: Geschmack",
+        "short_title": "Probieren ohne Geruchssinn",
+        "series_label": "Geschmack",
+        "fields": {
+          "oil_guess": {
+            "label": "Ist das ein Olivenöl?",
+            "yes_value": "Olivenöl",
+            "no_value": "Nicht-Olivenöl"
+          },
+          "overall": {
+            "label": "Gesamteindruck",
+            "summary_label": "Gesamt",
+            "left_label": "nie wieder",
+            "mid_label": "wie Rapsöl",
+            "right_label": "Lieblingsöl"
+          },
+          "bitter": {
+            "label": "Bitterkeit",
+            "summary_label": "Bitter",
+            "left_label": "nicht bitter",
+            "right_label": "Umami der Bitterstoffe"
+          },
+          "aroma_profile": {
+            "label": "Aromaprofil",
+            "placeholder": "z.B. schmeckt nach der Sonne Kretas"
+          }
+        }
+      },
+      "geruch": {
+        "title": "Testreihe 2: Geruch",
+        "short_title": "Schnüffeln ohne Schmecken",
+        "series_label": "Geruch",
+        "fields": {
+          "oil_guess": {
+            "label": "Ist das ein Olivenöl?",
+            "yes_value": "Olivenöl",
+            "no_value": "Nicht-Olivenöl"
+          },
+          "overall": {
+            "label": "Gesamteindruck",
+            "summary_label": "Gesamt",
+            "left_label": "nie wieder",
+            "mid_label": "wie Rapsöl",
+            "right_label": "Lieblingsöl"
+          },
+          "aroma_profile": {
+            "label": "Aromaprofil",
+            "placeholder": "z.B. schmeckt nach der Sonne Kretas"
+          }
+        }
+      },
+      "gesamt": {
+        "title": "Testreihe 3: ganzheitliche Erfahrung",
+        "short_title": "mit allen Sinnen ohne Einschränkungen",
+        "series_label": "volle Erfahrung",
+        "fields": {
+          "oil_guess": {
+            "label": "Ist das ein Olivenöl?",
+            "yes_value": "Olivenöl",
+            "no_value": "Nicht-Olivenöl"
+          },
+          "overall": {
+            "label": "Gesamteindruck",
+            "summary_label": "Gesamt",
+            "left_label": "nie wieder",
+            "mid_label": "wie Rapsöl",
+            "right_label": "Lieblingsöl"
+          },
+          "price_guess": {
+            "label": "Preisschätzung pro Liter",
+            "summary_label": "Preis",
+            "left_label": "1 €"
+          },
+          "aroma_profile": {
+            "label": "Aromaprofil",
+            "placeholder": "z.B. schmeckt nach der Sonne Kretas"
+          }
+        }
+      }
+    }
+  },
+  "/ergebnisse": {
+    "page_title": "Ergebnisse",
+    "heading": "Ergebnisse",
+    "eyebrow": "automatische Auswertung aller Bewertungen",
+    "loading": "Ergebnisse werden geladen...",
+    "login_lead": "Nach der Verkostung kannst du mit Eriks Passwort hier die Ergebnisse einsehen.",
+    "updated_prefix": "Aktualisiert:",
+    "no_data_updated": "noch keine Daten",
+    "tester_count": "Probanden",
+    "response_count": "abgegebene Einzelwertungen",
+    "ranking_heading": "Ranglisten",
+    "ranking_subtitle": "Alle Daten und Fakten in etlichen Statistiken! Welches Öl hat wo am besten abgeschnitten?",
+    "detail_link": "Aufschlüsselung nach Produkt",
+    "show_all": "alle anzeigen",
+    "show_top_3": "Top 3 anzeigen",
+    "expand_all": "alle Ranglisten aufklappen",
+    "collapse_all": "alle Ranglisten zusammenklappen",
+    "no_values": "Noch keine Werte.",
+    "rank_prefix": "Platz",
+    "rank_missing": "ohne Rang",
+    "chart_title": "Gesamteindrücke aller Öl-Proben",
+    "chart_subtitle": "Berechnung des Durchschnitts aller Wertungen je Testreihe",
+    "chart_empty": "Noch keine Gesamteindruck-Werte.",
+    "chart_mean_label": "Mittelwert",
+    "price_scatter_title": "geschätzter vs. realer Preis",
+    "price_scatter_subtitle": "Öle oberhalb der Linie wurden teurer wahrgenommen als in der Realität erhältlich und vice versa.",
+    "price_scatter_y_axis": "Schätzung",
+    "price_scatter_x_axis": "Realpreis",
+    "price_scatter_over_label": "überschätzt",
+    "price_scatter_under_label": "unterschätzt",
+    "price_scatter_reference_label": "Schätzung = Realität",
+    "rankings": {
+      "overall_survey_title": "Gesamteindruck: {series}",
+      "overall_all_title": "Durchschnitt aller Gesamteindrücke",
+      "overall_all_subtitle": "Mittelwert-Berechnung über alle Gesamteindrücke hinweg",
+      "spread_title": "Streuung",
+      "spread_subtitle": "Wie ambivalent wurde ein Öl gesamtgesellschaftlich wahrgenommen? Je gleicher die Wertungen ausfielen, desto niedriger die Streuung und besser der Rang.",
+      "own_spread_title": "individuelle Streuung",
+      "own_spread_subtitle": "Wie unterschiedlich hat jeder Einzelne individuell dasselbe Öl über die drei Testreihen hinweg gewertet? Je gleicher die Wertungen, desto besser der Rang.",
+      "bitter_title": "Bitterkeit",
+      "bitter_subtitle": "bitter = eklig \uD83D\uDE1D",
+      "accuracy_title": "Klassifizierungsquote",
+      "accuracy_subtitle": "Ist das Olivenöl? Welches Öl wurde am seltensten richtig erkannt?",
+      "price_guess_title": "Geschätzter Preis pro Liter",
+      "price_guess_subtitle": "Welches Öl schmeckte am teuersten?",
+      "price_deviation_title": "Abweichung vom Realpreis",
+      "price_deviation_subtitle": "Wie stark wurde der Geschmack über-/unterschätzt? Je teurer im Vergleich zur Realität wahrgenommen, desto besser."
+    }
+  },
+  "/einzelne-oel-wertungen": {
+    "page_title": "Aufschlüsselung",
+    "heading": "Aufschlüsselung nach Öl",
+    "eyebrow": "detaillierte Ergebnisse je Produkt und Freitextwertungen",
+    "loading": "Ergebnisse werden geladen...",
+    "login_lead": "Passwort eingeben, um die Ergebnisse zu öffnen.",
+    "real_price_unknown": "Realpreis unbekannt",
+    "ratings_suffix": "Wertungen",
+    "decrypt_button": "Dechiffrierung aufdecken",
+    "comments_title": "Kommentare zum Aromaprofil",
+    "comments_empty": "Noch keine Kommentare.",
+    "no_ranking": "Noch keine Rangliste.",
+    "anonymous": "anonym",
+    "categories": {
+      "overall": "Gesamtwertung",
+      "spread": "Streuung",
+      "own_spread": "individuelle Streuung",
+      "bitter": "Bitterkeit",
+      "price_guess": "geschätzter Preis",
+      "price_deviation": "Abweichung vom realen Preis",
+      "accuracy": "richtig klassifiziert"
+    }
+  },
+  "/oel-auswahl": {
+    "page_title": "Konfiguration",
+    "loading": "Konfiguration wird geladen...",
+    "protected_eyebrow": "Geschützt",
+    "heading": "Konfiguration der Olivenöl-Auswahl",
+    "login_lead": "Eriks Admin-Zugang um die Öl-Auswahl und Umfragen on the fly zu verwalten.",
+    "active_suffix": "aktiv",
+    "free_suffix": "frei",
+    "admin_lead": "Hinzufügen ist nur mit freien Platzhaltern möglich. Entfernen geht nur ohne Wertungen.",
+    "add_heading": "Öl hinzufügen",
+    "name_label": "Name",
+    "name_placeholder": "Name des Öls",
+    "price_label": "Preis pro Liter",
+    "price_placeholder": "€ pro Liter",
+    "is_olive_question": "Ist das ein Olivenöl?",
+    "yes_label": "Ja",
+    "no_label": "Nein",
+    "add_button": "Hinzufügen",
+    "no_placeholders": "Keine freien Platzhalter mehr.",
+    "database_heading": "Datenbank",
+    "database_notice": "Setzt alle Teilnehmer und alle Wertungen zurück. Die Öl-Auswahl bleibt erhalten.",
+    "database_reset_button": "Gesamte Datenbank zurücksetzen",
+    "save_button": "Speichern",
+    "clear_ratings_button": "Wertungen löschen",
+    "remove_button": "Entfernen",
+    "ratings_suffix": "Wertungen",
+    "taste_cipher": "Geschmack",
+    "smell_cipher": "Geruch",
+    "experience_cipher": "volle Erfahrung",
+    "load_failed": "Öl-Auswahl konnte nicht geladen werden.",
+    "action_failed": "Aktion fehlgeschlagen.",
+    "oil_added": "Öl hinzugefügt.",
+    "oil_saved": "Öl gespeichert.",
+    "confirm_clear": "Alle Wertungen für dieses Öl löschen?",
+    "confirm_remove": "Dieses Öl entfernen und den Slot wieder als Platzhalter freigeben?",
+    "confirm_reset": "Wirklich alle Teilnehmer und alle Wertungen löschen?"
+  }
+}
