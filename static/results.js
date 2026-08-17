@@ -1,17 +1,112 @@
 const app = document.getElementById("results-app");
 const mode = window.RESULTS_MODE || "rankings";
-const pageRoute = mode === "oils" ? "/einzelne-oel-wertungen" : "/ergebnisse";
+const pageRoutes = {
+  rankings: "/ergebnisse",
+  oils: "/einzelne-oel-wertungen",
+  competitive: "/kompetitive-verkostung",
+};
+const pageRoute = pageRoutes[mode] || "/ergebnisse";
 const revealedOils = new Set();
 const openOils = new Set();
 const openRankings = new Set();
 const expandedRankings = new Set();
 const commentScrollPositions = new Map();
-const PASSWORD_KEY = "oil_tasting_results_password";
+const tableScrollPositions = new Map();
+const loginScope = mode === "competitive" ? "competitive" : "results";
+const loginContexts = {
+  results: {
+    apiAccess: "results",
+    formAction: "/ergebnisse/login",
+    formName: "results-login",
+    passwordId: "results-password",
+    passwordName: "results-password",
+    passwordKey: "oil_tasting_results_password",
+    usernameId: "results-login-realm",
+    usernameName: "results-login-realm",
+    usernameValue: "ergebnisse",
+    autocomplete: "section-results current-password",
+  },
+  competitive: {
+    apiAccess: "competitive",
+    formAction: "/kompetitive-verkostung/login",
+    formName: "competitive-results-login",
+    passwordId: "competitive-results-password",
+    passwordName: "competitive-results-password",
+    passwordKey: "oil_tasting_competitive_results_password",
+    usernameId: "competitive-results-login-realm",
+    usernameName: "competitive-results-login-realm",
+    usernameValue: "kompetitive-verkostung",
+    autocomplete: "section-competitive-results current-password",
+  },
+};
+const loginContext = loginContexts[loginScope];
+const PASSWORD_KEY = loginContext.passwordKey;
+
+const greekSymbols = {
+  Alpha: "α",
+  Beta: "β",
+  Gamma: "γ",
+  Delta: "δ",
+  Epsilon: "ε",
+  Zeta: "ζ",
+  Eta: "η",
+  Theta: "θ",
+  Iota: "ι",
+  Kappa: "κ",
+  Lambda: "λ",
+  Mu: "μ",
+  Nu: "ν",
+  Xi: "ξ",
+  Omikron: "ο",
+  Pi: "π",
+  Rho: "ρ",
+  Sigma: "σ",
+  Tau: "τ",
+  Ypsilon: "υ",
+  Phi: "φ",
+  Chi: "χ",
+  Psi: "ψ",
+  Omega: "ω",
+};
+
+const pointColors = [
+  "#4f83cc",
+  "#c86b7a",
+  "#66a36f",
+  "#c3943f",
+  "#8b75c9",
+  "#42a7a5",
+  "#d47f49",
+  "#d06ca8",
+  "#7c9a42",
+  "#6f8fd8",
+  "#bf6f3a",
+  "#53a0cf",
+  "#a77244",
+  "#45a878",
+  "#9b78c8",
+  "#bf755f",
+  "#6aa0a7",
+  "#b98f39",
+  "#7886c7",
+  "#c3698e",
+  "#5f9d55",
+  "#a87dbd",
+  "#4f9a8b",
+  "#cf7a3d",
+];
 
 const state = {
   password: window.sessionStorage?.getItem(PASSWORD_KEY) || "",
   payload: null,
   allRankingsExpanded: false,
+  competitiveOilIndex: 0,
+  tasteRotation: -35,
+  rotatingTasteSpace: false,
+  selectingCompetitiveOil: false,
+  rotationStartX: 0,
+  rotationStartAngle: 0,
+  tasteSpaceAnimationFrame: 0,
 };
 
 function text(path, fallback = "") {
@@ -21,6 +116,15 @@ function text(path, fallback = "") {
     node = node[key];
   }
   return typeof node === "string" ? node : fallback;
+}
+
+function dict(path) {
+  let node = window.UI_TEXTS || {};
+  for (const key of path) {
+    if (!node || typeof node !== "object" || !(key in node)) return {};
+    node = node[key];
+  }
+  return node && typeof node === "object" && !Array.isArray(node) ? node : {};
 }
 
 function globalText(key, fallback = "") {
@@ -70,8 +174,8 @@ const realCurrency = (value) => (value === null || value === undefined ? oilText
 const percent = (value) => (value === null || value === undefined ? globalText("open_value", "offen") : `${Math.round(value * 100)}%`);
 const rank = (value) => (value ? `${resultsText("rank_prefix", "Platz")} ${value}` : resultsText("rank_missing", "ohne Rang"));
 const isMobileView = () => window.matchMedia("(max-width: 860px)").matches;
-const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselung je Öl" : "Ergebnisse");
-const pageEyebrow = () => routeText("eyebrow", mode === "oils" ? "detaillierte Ergebnisse" : "Live-Auswertung");
+const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselung je Öl" : mode === "competitive" ? "kompetitive Verkostung" : "Ergebnisse");
+const pageEyebrow = () => routeText("eyebrow", mode === "oils" ? "detaillierte Ergebnisse" : mode === "competitive" ? "Auswertung nach Probanden" : "Live-Auswertung");
 
 async function loadResults() {
   if (!state.password) {
@@ -79,7 +183,7 @@ async function loadResults() {
     return;
   }
 
-  const response = await fetch(`/api/results?password=${encodeURIComponent(state.password)}`, { credentials: "same-origin" });
+  const response = await fetch(`/api/results?access=${encodeURIComponent(loginContext.apiAccess)}&password=${encodeURIComponent(state.password)}`, { credentials: "same-origin" });
   const payload = await response.json();
   if (!payload.ok) {
     window.sessionStorage?.removeItem(PASSWORD_KEY);
@@ -89,6 +193,10 @@ async function loadResults() {
   }
 
   state.payload = payload;
+  if (mode === "competitive" && (state.selectingCompetitiveOil || state.rotatingTasteSpace)) {
+    updateTasteSpace();
+    return;
+  }
   render(payload);
 }
 
@@ -105,10 +213,27 @@ function renderLogin(error = "") {
       </div>
     </section>
 
-    <form class="setup-editor oil-login-panel" action="/ergebnisse/login" method="post" data-login-form="results">
-      <label>
+    <form class="setup-editor oil-login-panel" action="${escapeHtml(loginContext.formAction)}" method="post" data-login-form="${escapeHtml(loginContext.formName)}">
+      <label class="visually-hidden" for="${escapeHtml(loginContext.usernameId)}">
+        Anmeldebereich
+        <input
+          id="${escapeHtml(loginContext.usernameId)}"
+          name="${escapeHtml(loginContext.usernameName)}"
+          type="text"
+          value="${escapeHtml(loginContext.usernameValue)}"
+          autocomplete="username"
+          tabindex="-1"
+        >
+      </label>
+      <label for="${escapeHtml(loginContext.passwordId)}">
         ${escapeHtml(globalText("password_label", "Passwort"))}
-        <input id="results-password" name="results-password" type="password" autocomplete="section-results current-password" autofocus>
+        <input
+          id="${escapeHtml(loginContext.passwordId)}"
+          name="${escapeHtml(loginContext.passwordName)}"
+          type="password"
+          autocomplete="${escapeHtml(loginContext.autocomplete)}"
+          autofocus
+        >
       </label>
       <div class="setup-actions">
         <p class="notice ${error ? "error" : ""}">${escapeHtml(error || " ")}</p>
@@ -120,17 +245,14 @@ function renderLogin(error = "") {
 
 function render(payload) {
   rememberCommentScroll();
+  rememberTableScroll();
   const { summary } = payload;
-  const updated = summary.updated_at
-    ? new Date(summary.updated_at).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-    : routeText("no_data_updated", "noch keine Daten");
 
   app.innerHTML = `
     <section class="results-header">
       <div>
         <p class="eyebrow">${escapeHtml(pageEyebrow())}</p>
         <h1>${escapeHtml(pageHeading())}</h1>
-        <p class="lead">${escapeHtml(routeText("updated_prefix", "Aktualisiert:"))} ${escapeHtml(updated)}</p>
       </div>
       <div class="topbar-actions results-actions">
         <a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a>
@@ -146,9 +268,10 @@ function render(payload) {
         : ""
     }
 
-    ${mode === "oils" ? renderOilSection(payload) : renderRankingSection(payload)}
+    ${mode === "oils" ? renderOilSection(payload) : mode === "competitive" ? renderCompetitiveSection(payload) : renderRankingSection(payload)}
   `;
   restoreCommentScroll();
+  restoreTableScroll();
 }
 
 function renderRankingSection(payload) {
@@ -169,6 +292,7 @@ function renderRankingSection(payload) {
       </div>
       <div class="detail-link-panel">
         <a class="ghost-button" href="/einzelne-oel-wertungen">${escapeHtml(resultsText("detail_link", "Aufschlüsselung je Öl"))}</a>
+        <a class="ghost-button" href="/kompetitive-verkostung">${escapeHtml(resultsText("competitive_link", "kompetitive Verkostung"))}</a>
       </div>
     </section>
   `;
@@ -297,8 +421,7 @@ function renderPriceScatterChart(payload) {
           <p class="metric-sub">${escapeHtml(resultsText("price_scatter_subtitle", "Punkte über der Linie wurden höher geschätzt als der reale Preis."))}</p>
         </div>
         <div class="price-scatter-legend">
-          <span><i class="over"></i>${escapeHtml(resultsText("price_scatter_over_label", "überschätzt"))}</span>
-          <span><i class="under"></i>${escapeHtml(resultsText("price_scatter_under_label", "unterschätzt"))}</span>
+          ${points.map((point, index) => `<span><i style="--legend-color:${escapeHtml(pointColor(index))}"></i>${escapeHtml(shortOilLabel(point.name))}</span>`).join("")}
           <span><i class="reference"></i>${escapeHtml(resultsText("price_scatter_reference_label", "100%-Linie"))}</span>
         </div>
       </div>
@@ -319,7 +442,7 @@ function renderPriceScatterChart(payload) {
             <line class="price-scatter-reference" x1="0" y1="100" x2="100" y2="0"></line>
           </svg>
           <div class="price-scatter-points">
-            ${points.map((point) => renderPriceScatterPoint(point, max)).join("")}
+            ${points.map((point, index) => renderPriceScatterPoint(point, max, index)).join("")}
           </div>
         </div>
         <div></div>
@@ -333,7 +456,7 @@ function renderPriceScatterChart(payload) {
   `;
 }
 
-function renderPriceScatterPoint(point, max) {
+function renderPriceScatterPoint(point, max, index) {
   const actual = Number(point.actual_price_per_liter_eur);
   const guess = Number(point.price_guess_avg);
   const percentValue = Number(point.price_deviation_percent);
@@ -344,7 +467,7 @@ function renderPriceScatterPoint(point, max) {
   return `
     <span
       class="price-scatter-point ${percentValue >= 0 ? "over" : "under"}${labelSide}"
-      style="--point-x:${escapeHtml(left)}%;--point-y:${escapeHtml(top)}%"
+      style="--point-x:${escapeHtml(left)}%;--point-y:${escapeHtml(top)}%;--point-color:${escapeHtml(pointColor(index))}"
       title="${escapeHtml(title)}"
       aria-label="${escapeHtml(title)}"
     >
@@ -352,6 +475,10 @@ function renderPriceScatterPoint(point, max) {
       <span class="price-scatter-label">${escapeHtml(shortOilLabel(point.name))}</span>
     </span>
   `;
+}
+
+function pointColor(index) {
+  return pointColors[index % pointColors.length];
 }
 
 function shortOilLabel(name) {
@@ -393,6 +520,249 @@ function renderOilSection(payload) {
   `;
 }
 
+function renderCompetitiveSection(payload) {
+  const competitive = payload.competitive || {};
+  const forceExpanded = state.allRankingsExpanded && !isMobileView();
+  return `
+    <section class="overview-section competitive-section">
+      <div class="section-heading ranking-section-heading">
+        <div>
+          <h2>${escapeHtml(routeText("ranking_heading", "Ranglisten"))}</h2>
+          <p>${escapeHtml(routeText("ranking_subtitle", "Direkte Auswertung der Probanden."))}</p>
+        </div>
+        <button class="ghost-button desktop-only" type="button" data-action="toggle-all-rankings">${escapeHtml(forceExpanded ? resultsText("collapse_all", "Top 3 anzeigen") : resultsText("expand_all", "alle aufklappen"))}</button>
+      </div>
+      <div class="ranking-grid compact">
+        ${(competitive.rankings || []).map((ranking) => renderRankingCard(ranking, `competitive-${ranking.key}`)).join("")}
+      </div>
+      ${renderTasteSpace(competitive)}
+      ${renderClusterTable(competitive.clusters)}
+    </section>
+  `;
+}
+
+function renderTasteSpace(competitive) {
+  const oils = competitive.coordinate_oils || [];
+  const populated = oils.filter((oil) => (oil.points || []).length);
+  if (!populated.length) {
+    return `
+      <article class="metric-card taste-space-card empty-chart">
+        <h2>${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}</h2>
+        <p class="notice">${escapeHtml(routeText("space_empty", "Noch keine vollständigen Wertungen für das Koordinatensystem."))}</p>
+      </article>
+    `;
+  }
+
+  state.competitiveOilIndex = Math.max(0, Math.min(state.competitiveOilIndex, populated.length - 1));
+  const oil = populated[state.competitiveOilIndex];
+  const sliderMax = Math.max(0, populated.length - 1);
+  const sliderPos = sliderMax ? (state.competitiveOilIndex / sliderMax) * 100 : 0;
+  return `
+    <article class="metric-card taste-space-card">
+      <div class="taste-space-heading">
+        <div>
+          <h2>${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}</h2>
+          <p class="metric-sub">${escapeHtml(oil.name)}</p>
+        </div>
+        <div class="taste-space-slider range-widget">
+          <div class="range-control simple-range-control" style="--range-pos:${escapeHtml(sliderPos.toFixed(2))}%">
+            ${renderSimpleTicks(0, sliderMax, 1)}
+            <input type="range" min="0" max="${escapeHtml(sliderMax)}" step="1" value="${escapeHtml(state.competitiveOilIndex)}" data-action="select-competitive-oil">
+          </div>
+        </div>
+      </div>
+      <div class="taste-space-plot" data-action="rotate-taste-space">
+        ${renderTasteSpaceSvg(oil.points || [])}
+      </div>
+    </article>
+  `;
+}
+
+function competitivePopulatedOils() {
+  return (state.payload?.competitive?.coordinate_oils || []).filter((oil) => (oil.points || []).length);
+}
+
+function selectedCompetitiveOil() {
+  const populated = competitivePopulatedOils();
+  if (!populated.length) return null;
+  state.competitiveOilIndex = Math.max(0, Math.min(state.competitiveOilIndex, populated.length - 1));
+  return populated[state.competitiveOilIndex];
+}
+
+function scheduleTasteSpaceUpdate() {
+  if (state.tasteSpaceAnimationFrame) return;
+  state.tasteSpaceAnimationFrame = window.requestAnimationFrame(() => {
+    state.tasteSpaceAnimationFrame = 0;
+    updateTasteSpace();
+  });
+}
+
+function updateTasteSpace() {
+  const oil = selectedCompetitiveOil();
+  if (!oil) return;
+
+  const card = app.querySelector(".taste-space-card");
+  const plot = card?.querySelector(".taste-space-plot");
+  const title = card?.querySelector(".taste-space-heading .metric-sub");
+  if (title) title.textContent = oil.name;
+  if (plot) plot.innerHTML = renderTasteSpaceSvg(oil.points || []);
+
+  const slider = card?.querySelector('[data-action="select-competitive-oil"]');
+  const populated = competitivePopulatedOils();
+  const sliderMax = Math.max(0, populated.length - 1);
+  const sliderPos = sliderMax ? (state.competitiveOilIndex / sliderMax) * 100 : 0;
+  slider?.setAttribute("max", String(sliderMax));
+  if (slider) slider.value = String(state.competitiveOilIndex);
+  slider?.closest(".range-control")?.style.setProperty("--range-pos", `${sliderPos.toFixed(2)}%`);
+}
+
+function renderTasteSpaceSvg(points) {
+  const axisX = routeText("space_x_axis", "Geschmack");
+  const axisY = routeText("space_y_axis", "Geruch");
+  const axisZ = routeText("space_z_axis", "volle Erfahrung");
+  return `
+    <svg viewBox="0 0 100 100" role="img" aria-label="${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}">
+      <defs>
+        <marker id="taste-axis-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z"></path>
+        </marker>
+      </defs>
+      ${render3dAxis("x", axisX)}
+      ${render3dAxis("y", axisY)}
+      ${render3dAxis("z", axisZ)}
+      ${render3dLine([-5, -5, -5], [5, 5, 5], "taste-diagonal")}
+      ${points.map((point, index) => render3dPoint(point, index)).join("")}
+    </svg>
+  `;
+}
+
+function renderSimpleTicks(min, max, step) {
+  if (max <= min) return "";
+  const values = [];
+  for (let value = min; value <= max; value += step) {
+    values.push(value);
+  }
+  if (values[values.length - 1] !== max) values.push(max);
+  return `<div class="tick-row" aria-hidden="true">${values
+    .map((value) => `<span style="left:${escapeHtml(((value - min) / (max - min)) * 100)}%"></span>`)
+    .join("")}</div>`;
+}
+
+function project3d(x, y, z) {
+  const angle = (Number(state.tasteRotation) * Math.PI) / 180;
+  const rotatedX = x * Math.cos(angle) - y * Math.sin(angle);
+  const rotatedY = x * Math.sin(angle) + y * Math.cos(angle);
+  return {
+    x: 50 + rotatedX * 6.1,
+    y: 56 + rotatedY * 3.0 - z * 5.6,
+  };
+}
+
+function render3dLine(start, end, className, arrow = false) {
+  const a = project3d(start[0], start[1], start[2]);
+  const b = project3d(end[0], end[1], end[2]);
+  return `<line class="${escapeHtml(className)}" x1="${escapeHtml(a.x.toFixed(2))}" y1="${escapeHtml(a.y.toFixed(2))}" x2="${escapeHtml(b.x.toFixed(2))}" y2="${escapeHtml(b.y.toFixed(2))}" ${arrow ? 'marker-end="url(#taste-axis-arrow)"' : ""}></line>`;
+}
+
+function render3dAxis(axis, label) {
+  const vector = axis === "x" ? [1, 0, 0] : axis === "y" ? [0, 1, 0] : [0, 0, 1];
+  const negative = vector.map((value) => value * -5);
+  const positive = vector.map((value) => value * 5);
+  const labelPosition = vector.map((value) => value * 5.8);
+  return `
+    ${render3dLine(negative, positive, `taste-axis axis-${axis}`, true)}
+    ${[-5, 0, 5].map((value) => render3dTick(axis, value)).join("")}
+    ${render3dLabel(labelPosition, label)}
+  `;
+}
+
+function render3dTick(axis, value) {
+  const point = axis === "x" ? [value, 0, 0] : axis === "y" ? [0, value, 0] : [0, 0, value];
+  return render3dLabel(point, String(value), "middle", "taste-tick-label");
+}
+
+function render3dLabel(position, label, anchor = "middle", className = "taste-axis-label") {
+  const point = project3d(position[0], position[1], position[2]);
+  return `<text class="${escapeHtml(className)}" x="${escapeHtml(point.x.toFixed(2))}" y="${escapeHtml(point.y.toFixed(2))}" text-anchor="${escapeHtml(anchor)}">${escapeHtml(label)}</text>`;
+}
+
+function render3dPoint(point, index) {
+  const projected = project3d(Number(point.x), Number(point.y), Number(point.z));
+  const labelLeft = projected.x > 70;
+  const title = `${point.name}: ${routeText("space_x_axis", "Geschmack")} ${number(point.x)}, ${routeText("space_y_axis", "Geruch")} ${number(point.y)}, ${routeText("space_z_axis", "volle Erfahrung")} ${number(point.z)}`;
+  return `
+    <g class="taste-point ${labelLeft ? "label-left" : ""}" transform="translate(${escapeHtml(projected.x.toFixed(2))} ${escapeHtml(projected.y.toFixed(2))})">
+      <title>${escapeHtml(title)}</title>
+      <circle r="1.65" fill="${escapeHtml(pointColor(index))}"></circle>
+      <text x="${labelLeft ? "-2.9" : "2.9"}" y="0.85" text-anchor="${labelLeft ? "end" : "start"}">${escapeHtml(point.name)}</text>
+    </g>
+  `;
+}
+
+function renderClusterTable(cluster) {
+  const items = cluster?.items || [];
+  if (!items.length) return "";
+  const labels = dict(["/kompetitive-verkostung", "clusters"]);
+  const maxDistance = Number(cluster.max_distance) || 1;
+  return `
+    <article class="metric-card cluster-card">
+      <div class="cluster-heading">
+        <div>
+          <h2>${escapeHtml(cluster.title)}</h2>
+          <p class="metric-sub">${escapeHtml(cluster.subtitle || "")}</p>
+        </div>
+        <div class="cluster-legend">
+          ${uniqueClusters(items).map((clusterId) => `<span class="cluster-badge cluster-${escapeHtml(clusterId)}">${escapeHtml(`${labels.cluster_label || "Cluster"} ${clusterId}`)}</span>`).join("")}
+        </div>
+      </div>
+      <div class="data-table-wrap cluster-table-wrap" data-scroll-key="${escapeHtml(slugify(cluster.title))}">
+        <table class="data-table cluster-table">
+          <thead>
+            <tr>
+              <th>Proband</th>
+              <th>${escapeHtml(labels.cluster_label || "Cluster")}</th>
+              <th>${escapeHtml(labels.vector_label || "Vektor")}</th>
+              ${items.map((item) => `<th>${escapeHtml(item.name)}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((item) => renderClusterRow(item, items, maxDistance, labels)).join("")}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+function renderClusterRow(item, items, maxDistance, labels) {
+  const distances = new Map((item.distances || []).map((distance) => [distance.participant_id, distance.value]));
+  return `
+    <tr class="cluster-row cluster-${escapeHtml(item.cluster)}">
+      <th>${escapeHtml(item.name)}</th>
+      <td><span class="cluster-badge cluster-${escapeHtml(item.cluster)}">${escapeHtml(`${labels.cluster_label || "Cluster"} ${item.cluster}`)}</span></td>
+      <td class="cluster-vector">${escapeHtml(formatVector(item.vector))}</td>
+      ${items.map((other) => renderClusterDistanceCell(distances.get(other.participant_id), maxDistance)).join("")}
+    </tr>
+  `;
+}
+
+function renderClusterDistanceCell(value, maxDistance) {
+  if (value === null || value === undefined) return `<td></td>`;
+  const numeric = Number(value);
+  const closeness = maxDistance <= 0 ? 1 : 1 - Math.min(1, numeric / maxDistance);
+  const alpha = 0.08 + closeness * 0.34;
+  return `<td class="cluster-distance" style="--distance-alpha:${escapeHtml(alpha.toFixed(3))}">${escapeHtml(number(numeric))}</td>`;
+}
+
+function uniqueClusters(items) {
+  return [...new Set(items.map((item) => item.cluster))].sort((a, b) => a - b);
+}
+
+function formatVector(vector) {
+  const values = (vector || []).map((value) => number(value));
+  return values.length === 1 ? values[0] : `(${values.join("; ")})`;
+}
+
 function metricCard(label, value, sub = "") {
   return `
     <article class="metric-card">
@@ -412,7 +782,7 @@ function renderRankingCard(ranking, id) {
   const domain = rankingDomain(ranking.items, ranking);
   const showToggle = ranking.items.length > 3 && !forceExpanded;
   return `
-    <article class="metric-card ranking-card ${open ? "open" : ""}" style="--ranking-color:${escapeHtml(rankingColorAccent(ranking))}" data-ranking-card="${escapeHtml(id)}">
+    <article class="metric-card ranking-card ${open ? "open" : ""}" style="--ranking-color:${escapeHtml(rankingColorAccent(ranking, "card"))}" data-ranking-card="${escapeHtml(id)}">
       <button class="ranking-card-toggle" type="button" data-action="toggle-ranking-card" data-ranking-id="${escapeHtml(id)}">
         <span class="ranking-card-title">
           <h3>${escapeHtml(ranking.title)}</h3>
@@ -421,18 +791,19 @@ function renderRankingCard(ranking, id) {
         <span class="ranking-card-icon">${open ? "-" : "+"}</span>
       </button>
       <div class="ranking-card-body">
-        ${ranking.items.length ? `<ol>${shown.map((item, index) => renderRankingItem(item, ranking, "", index, ranking.items.length, domain, expanded)).join("")}</ol>` : `<p class="notice">${escapeHtml(resultsText("no_values", "Noch keine Werte."))}</p>`}
+        ${ranking.items.length ? `<ol>${shown.map((item, index) => renderRankingItem(item, ranking, "", index, ranking.items.length, domain, expanded, "card")).join("")}</ol>` : `<p class="notice">${escapeHtml(resultsText("no_values", "Noch keine Werte."))}</p>`}
         ${showToggle ? `<button class="text-button ranking-toggle" type="button" data-action="toggle-ranking" data-ranking-id="${escapeHtml(id)}">${expanded ? escapeHtml(resultsText("show_top_3", "Top 3 anzeigen")) : escapeHtml(resultsText("show_all", "Alle anzeigen"))}</button>` : ""}
       </div>
     </article>
   `;
 }
 
-function renderRankingItem(item, ranking, currentOilId, index, total, domain, showBoxPlot = false) {
+function renderRankingItem(item, ranking, currentOilId, index, total, domain, showBoxPlot = false, variant = "mini") {
   const value = formatByUnit(item.value, ranking.unit);
-  const current = item.oil_id === currentOilId ? " current" : "";
+  const itemId = item.oil_id || item.participant_id || item.id;
+  const current = itemId === currentOilId ? " current" : "";
   const rankRatio = total <= 1 ? 0 : index / (total - 1);
-  const color = rankingColor(ranking, rankRatio);
+  const color = rankingColor(ranking, rankRatio, variant);
   const graph = showBoxPlot ? renderRankingGraph(item, ranking, domain) : "";
   return `
     <li class="${current}${graph ? " has-graph" : ""}" style="--rank-bg:${escapeHtml(color)}">
@@ -459,6 +830,7 @@ function renderRankPlace(rankValue, useCrown = true) {
 
 function renderRankingGraph(item, ranking, domain) {
   if (ranking.graph === "price_deviation") return renderPriceDeviationPlot(item, ranking.price_domain);
+  if (["spread", "own_spread"].includes(ranking.key)) return "";
   if (item.box) return renderBoxPlot(item.box, domain, ranking.unit);
   return "";
 }
@@ -545,7 +917,7 @@ function renderOilCard(oil, surveys, rankings) {
         <div class="cipher-box ${revealedOils.has(oil.id) ? "revealed" : ""}">
           <div class="cipher-values">
             ${surveys
-              .map((survey) => `<span><b>${escapeHtml(seriesLabel(survey))}</b>${escapeHtml(oil.ciphers[survey.id] || "-")}</span>`)
+              .map((survey) => `<span><b>${escapeHtml(seriesLabel(survey))}</b>${escapeHtml(displayCipher(oil.ciphers[survey.id], survey))}</span>`)
               .join("")}
           </div>
           ${revealedOils.has(oil.id) ? "" : `<button class="cipher-shield" type="button" data-action="reveal">${escapeHtml(oilText("decrypt_button", "Dechiffrierung aufdecken"))}</button>`}
@@ -614,7 +986,8 @@ function rankMarkup(rankValue, ranking) {
 }
 
 function rankingUsesCrowns(ranking) {
-  return !["guess_accuracy", "own_spread"].includes(ranking?.key || "");
+  if (ranking?.crowns === false) return false;
+  return !["guess_accuracy", "spread", "own_spread"].includes(ranking?.key || "");
 }
 
 function renderMiniRanking(ranking, id, currentOilId) {
@@ -622,19 +995,26 @@ function renderMiniRanking(ranking, id, currentOilId) {
   const shown = expanded ? ranking.items : ranking.items.slice(0, 3);
   const domain = rankingDomain(ranking.items, ranking);
   return `
-    ${ranking.items.length ? `<ol class="mini-ranking" style="--ranking-color:${escapeHtml(rankingColorAccent(ranking))};">${shown.map((item, index) => renderRankingItem(item, ranking, currentOilId, index, ranking.items.length, domain, expanded)).join("")}</ol>` : `<p class="notice">${escapeHtml(resultsText("no_values", "Noch keine Werte."))}</p>`}
+    ${ranking.items.length ? `<ol class="mini-ranking" style="--ranking-color:${escapeHtml(rankingColorAccent(ranking))};">${shown.map((item, index) => renderRankingItem(item, ranking, currentOilId, index, ranking.items.length, domain, expanded, "mini")).join("")}</ol>` : `<p class="notice">${escapeHtml(resultsText("no_values", "Noch keine Werte."))}</p>`}
     ${ranking.items.length > 3 ? `<button class="text-button ranking-toggle" type="button" data-action="toggle-ranking" data-ranking-id="${escapeHtml(id)}">${expanded ? escapeHtml(resultsText("show_top_3", "Top 3 anzeigen")) : escapeHtml(resultsText("show_all", "Alle anzeigen"))}</button>` : ""}
   `;
 }
 
 function renderComment(comment) {
-  const author = comment.author ? comment.author : oilText("anonymous", "anonym");
   return `
     <article class="comment-item">
-      <span>${escapeHtml(comment.series_label || comment.survey_title || "")} - ${escapeHtml(author)}</span>
+      <span>${escapeHtml(commentIntro(comment))}</span>
       <p>${escapeHtml(comment.text)}</p>
     </article>
   `;
+}
+
+function commentIntro(comment) {
+  const author = comment.author ? comment.author : oilText("anonymous", "anonym");
+  const label = comment.series_label || comment.survey_title || "";
+  const normalized = String(label).toLocaleLowerCase("de-DE");
+  const article = comment.survey_id === "gesamt" || normalized.includes("erfahrung") ? "zur" : "zum";
+  return `${article} ${label} von ${author}:`;
 }
 
 function findRanking(rankings, titleOrKey) {
@@ -643,6 +1023,11 @@ function findRanking(rankings, titleOrKey) {
 
 function seriesLabel(survey) {
   return survey.series_label || survey.short_title || survey.title || survey.id;
+}
+
+function displayCipher(cipher, survey = {}) {
+  if (survey.cipher_set === "greek") return greekSymbols[cipher] || cipher || "-";
+  return cipher || "-";
 }
 
 function formatByUnit(value, unit) {
@@ -680,14 +1065,15 @@ function position(value, domain) {
   return Math.max(0, Math.min(100, ((value - domain.min) / (domain.max - domain.min)) * 100));
 }
 
-function rankingColorAccent(ranking) {
+function rankingColorAccent(ranking, variant = "mini") {
   if (ranking.color) return ranking.color;
+  if (variant === "card" && ["spread", "own_spread"].includes(ranking.key)) return "var(--blue-ranking-color)";
   return "var(--neutral-ranking-color)";
 }
 
-function rankingColor(ranking, rankRatio) {
-  if (ranking.key === "price_guess") return priceGradientColor(rankRatio);
-  const ratio = ranking.key === "guess_accuracy" ? 1 - rankRatio : rankRatio;
+function rankingColor(ranking, rankRatio, variant = "mini") {
+  if (["price_guess", "participant_average_overall", "participant_bitter"].includes(ranking.key) || (variant === "card" && ["spread", "own_spread"].includes(ranking.key))) return priceGradientColor(rankRatio);
+  const ratio = ["guess_accuracy", "participant_classification"].includes(ranking.key) ? 1 - rankRatio : rankRatio;
   return gradientColor(ratio);
 }
 
@@ -716,6 +1102,21 @@ function restoreCommentScroll() {
   }
 }
 
+function rememberTableScroll() {
+  for (const node of app.querySelectorAll(".cluster-table-wrap[data-scroll-key]")) {
+    tableScrollPositions.set(node.dataset.scrollKey, { left: node.scrollLeft, top: node.scrollTop });
+  }
+}
+
+function restoreTableScroll() {
+  for (const node of app.querySelectorAll(".cluster-table-wrap[data-scroll-key]")) {
+    const position = tableScrollPositions.get(node.dataset.scrollKey);
+    if (!position) continue;
+    node.scrollLeft = position.left;
+    node.scrollTop = position.top;
+  }
+}
+
 function slugify(value) {
   return String(value)
     .toLocaleLowerCase("de-DE")
@@ -730,7 +1131,7 @@ function slugify(value) {
 function handleClick(event) {
   const login = event.target.closest('[data-action="login-results"]');
   if (login) {
-    state.password = document.getElementById("results-password")?.value || "";
+    state.password = document.getElementById(loginContext.passwordId)?.value || "";
     window.sessionStorage?.setItem(PASSWORD_KEY, state.password);
     loadResults().catch((error) => renderLogin(error.message));
     return;
@@ -787,8 +1188,49 @@ function handleClick(event) {
 
 app.addEventListener("click", handleClick);
 
+app.addEventListener("input", (event) => {
+  const slider = event.target.closest('[data-action="select-competitive-oil"]');
+  if (!slider) return;
+  state.selectingCompetitiveOil = true;
+  state.competitiveOilIndex = Number(slider.value) || 0;
+  updateTasteSpace();
+});
+
+app.addEventListener("change", (event) => {
+  const slider = event.target.closest('[data-action="select-competitive-oil"]');
+  if (!slider) return;
+  state.selectingCompetitiveOil = false;
+  updateTasteSpace();
+});
+
+app.addEventListener("pointerdown", (event) => {
+  const slider = event.target.closest('[data-action="select-competitive-oil"]');
+  if (slider) {
+    state.selectingCompetitiveOil = true;
+    return;
+  }
+
+  const plot = event.target.closest('[data-action="rotate-taste-space"]');
+  if (!plot) return;
+  state.rotatingTasteSpace = true;
+  state.rotationStartX = event.clientX;
+  state.rotationStartAngle = state.tasteRotation;
+  plot.setPointerCapture?.(event.pointerId);
+});
+
+document.addEventListener("pointermove", (event) => {
+  if (!state.rotatingTasteSpace) return;
+  state.tasteRotation = state.rotationStartAngle + (event.clientX - state.rotationStartX) * 0.7;
+  scheduleTasteSpaceUpdate();
+});
+
+document.addEventListener("pointerup", () => {
+  state.selectingCompetitiveOil = false;
+  state.rotatingTasteSpace = false;
+});
+
 app.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && event.target?.id === "results-password") {
+  if (event.key === "Enter" && event.target?.id === loginContext.passwordId) {
     event.preventDefault();
     app.querySelector('[data-action="login-results"]')?.click();
   }
@@ -811,5 +1253,6 @@ loadResults().catch((error) => {
 });
 
 setInterval(() => {
+  if (state.selectingCompetitiveOil || state.rotatingTasteSpace) return;
   if (state.password) loadResults().catch(() => undefined);
 }, 2000);

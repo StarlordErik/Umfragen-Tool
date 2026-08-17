@@ -90,9 +90,9 @@
       "price_source": "https://www.buttinale73.com/en",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Psi",
-        "geruch": "F",
-        "gesamt": "22"
+        "geschmack": "Theta",
+        "geruch": "V",
+        "gesamt": "14"
       }
     },
     {
@@ -104,9 +104,9 @@
       "price_source": "https://shop.bioplanete.de/olivenoel-mild-nativ-extra",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Eta",
-        "geruch": "X",
-        "gesamt": "17"
+        "geschmack": "Rho",
+        "geruch": "J",
+        "gesamt": "13"
       }
     },
     {
@@ -118,9 +118,9 @@
       "price_source": "https://www.knuspr.de/41041-carapelli-bio-natives-olivenoel-extra",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Lambda",
-        "geruch": "H",
-        "gesamt": "6"
+        "geschmack": "Omikron",
+        "geruch": "T",
+        "gesamt": "16"
       }
     },
     {
@@ -132,9 +132,9 @@
       "price_source": "Öl-Auswahl",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Rho",
-        "geruch": "P",
-        "gesamt": "20"
+        "geschmack": "Delta",
+        "geruch": "K",
+        "gesamt": "2"
       }
     },
     {
@@ -146,9 +146,9 @@
       "price_source": "https://sivix.com/de-DE/catalogue/products/rewe-bio-natives-olivenol-extra-0-75-l-rewe-whIqw2cQTOeeJSAD",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Sigma",
-        "geruch": "W",
-        "gesamt": "14"
+        "geschmack": "Mu",
+        "geruch": "O",
+        "gesamt": "12"
       }
     },
     {
@@ -161,9 +161,9 @@
       "baseline": true,
       "implemented": true,
       "ciphers": {
-        "geschmack": "Beta",
-        "geruch": "T",
-        "gesamt": "19"
+        "geschmack": "Zeta",
+        "geruch": "U",
+        "gesamt": "5"
       }
     },
     {
@@ -175,9 +175,9 @@
       "price_source": "https://thessaloniki.shopdutyfree.com/en/103/minerva-horio-koroneiki-variety-olive-oil-75cl",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Xi",
-        "geruch": "B",
-        "gesamt": "4"
+        "geschmack": "Ypsilon",
+        "geruch": "G",
+        "gesamt": "3"
       }
     },
     {
@@ -189,9 +189,9 @@
       "price_source": "Nutzerangabe",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Alpha",
-        "geruch": "U",
-        "gesamt": "2"
+        "geschmack": "Chi",
+        "geruch": "M",
+        "gesamt": "20"
       }
     },
     {
@@ -203,9 +203,9 @@
       "price_source": "https://frantoioveronesi.com/it/product/tartufo-bianco/30293",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Kappa",
-        "geruch": "O",
-        "gesamt": "8"
+        "geschmack": "Alpha",
+        "geruch": "Q",
+        "gesamt": "19"
       }
     },
     {
@@ -214,9 +214,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Ypsilon",
-        "geruch": "D",
-        "gesamt": "15"
+        "geschmack": "Eta",
+        "geruch": "I",
+        "gesamt": "1"
       }
     },
     {
@@ -225,9 +225,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Omega",
-        "geruch": "L",
-        "gesamt": "21"
+        "geschmack": "Tau",
+        "geruch": "E",
+        "gesamt": "18"
       }
     },
     {
@@ -236,9 +236,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Iota",
-        "geruch": "M",
-        "gesamt": "5"
+        "geschmack": "Beta",
+        "geruch": "S",
+        "gesamt": "8"
       }
     },
     {
@@ -247,9 +247,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Theta",
-        "geruch": "N",
-        "gesamt": "1"
+        "geschmack": "Iota",
+        "geruch": "B",
+        "gesamt": "22"
       }
     },
     {
@@ -258,9 +258,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Delta",
-        "geruch": "J",
-        "gesamt": "12"
+        "geschmack": "Pi",
+        "geruch": "L",
+        "gesamt": "9"
       }
     },
     {
@@ -269,9 +269,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Phi",
-        "geruch": "I",
-        "gesamt": "3"
+        "geschmack": "Nu",
+        "geruch": "R",
+        "gesamt": "10"
       }
     },
     {
@@ -280,9 +280,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Gamma",
-        "geruch": "R",
-        "gesamt": "18"
+        "geschmack": "Phi",
+        "geruch": "H",
+        "gesamt": "11"
       }
     },
     {
@@ -291,9 +291,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Mu",
-        "geruch": "E",
-        "gesamt": "10"
+        "geschmack": "Kappa",
+        "geruch": "D",
+        "gesamt": "24"
       }
     },
     {
@@ -302,9 +302,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Omikron",
-        "geruch": "G",
-        "gesamt": "16"
+        "geschmack": "Omega",
+        "geruch": "X",
+        "gesamt": "7"
       }
     },
     {
@@ -313,9 +313,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Epsilon",
-        "geruch": "Q",
-        "gesamt": "23"
+        "geschmack": "Sigma",
+        "geruch": "A",
+        "gesamt": "15"
       }
     },
     {
@@ -324,9 +324,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Pi",
-        "geruch": "C",
-        "gesamt": "9"
+        "geschmack": "Xi",
+        "geruch": "F",
+        "gesamt": "21"
       }
     },
     {
@@ -335,9 +335,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Chi",
-        "geruch": "S",
-        "gesamt": "24"
+        "geschmack": "Lambda",
+        "geruch": "W",
+        "gesamt": "17"
       }
     },
     {
@@ -346,9 +346,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Zeta",
-        "geruch": "V",
-        "gesamt": "7"
+        "geschmack": "Psi",
+        "geruch": "N",
+        "gesamt": "6"
       }
     },
     {
@@ -357,9 +357,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Tau",
-        "geruch": "K",
-        "gesamt": "11"
+        "geschmack": "Epsilon",
+        "geruch": "P",
+        "gesamt": "4"
       }
     },
     {
@@ -368,9 +368,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Nu",
-        "geruch": "A",
-        "gesamt": "13"
+        "geschmack": "Gamma",
+        "geruch": "C",
+        "gesamt": "23"
       }
     }
   ]

@@ -14,6 +14,7 @@
   --yellow: #d49b2b;
   --overall-ranking-color: #ffffff;
   --neutral-ranking-color: #aa9a6a;
+  --blue-ranking-color: #6f9ee8;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -96,6 +97,14 @@ a {
   letter-spacing: 0;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.topbar-subtitle {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: clamp(1.04rem, 2.4vw, 1.5rem);
+  font-weight: 760;
+  line-height: 1.2;
 }
 
 .topbar-actions {
@@ -402,6 +411,8 @@ a {
 .admin-link-section,
 .detail-link-panel {
   display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   justify-content: center;
   margin-top: 28px;
 }
@@ -1510,6 +1521,10 @@ a {
 
 .price-scatter-legend i {
   flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--legend-color, #6f9ee8);
 }
 
 .price-scatter-legend .over,
@@ -1617,12 +1632,12 @@ a {
   height: 12px;
   border: 2px solid #15181d;
   border-radius: 999px;
-  background: #2f7d62;
+  background: var(--point-color, #6f9ee8);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.34);
 }
 
 .price-scatter-point.under .price-scatter-dot {
-  background: #b65353;
+  background: var(--point-color, #6f9ee8);
 }
 
 .price-scatter-label {
@@ -1671,6 +1686,184 @@ a {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 760;
+}
+
+.competitive-section {
+  display: grid;
+  gap: 28px;
+}
+
+.taste-space-card {
+  overflow: hidden;
+}
+
+.taste-space-heading,
+.cluster-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.taste-space-heading h2,
+.cluster-heading h2 {
+  margin: 0;
+}
+
+.taste-space-slider {
+  min-width: min(320px, 100%);
+  display: grid;
+  padding-top: 2px;
+}
+
+.taste-space-slider input {
+  width: 100%;
+  accent-color: var(--blue-ranking-color);
+}
+
+.simple-range-control {
+  --accent: var(--blue-ranking-color);
+  min-height: 42px;
+}
+
+.taste-space-plot {
+  min-height: clamp(520px, 56vw, 660px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    #15181d;
+  background-size: 34px 34px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.taste-space-plot:active {
+  cursor: grabbing;
+}
+
+.taste-space-plot svg {
+  display: block;
+  width: 100%;
+  height: clamp(520px, 56vw, 660px);
+  overflow: visible;
+}
+
+.taste-space-plot marker path {
+  fill: rgba(255, 255, 255, 0.62);
+}
+
+.taste-axis {
+  stroke: rgba(255, 255, 255, 0.45);
+  stroke-width: 0.45;
+  vector-effect: non-scaling-stroke;
+}
+
+.taste-diagonal {
+  stroke: #ffffff;
+  stroke-width: 0.7;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.taste-axis-label,
+.taste-tick-label {
+  fill: var(--muted);
+  font-size: 2.35px;
+  font-weight: 800;
+}
+
+.taste-tick-label {
+  fill: rgba(255, 255, 255, 0.74);
+  font-size: 2px;
+}
+
+.taste-point circle {
+  stroke: #111827;
+  stroke-width: 0.38;
+  vector-effect: non-scaling-stroke;
+}
+
+.taste-point text {
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: rgba(17, 24, 39, 0.88);
+  stroke-width: 0.5;
+  font-size: 1.72px;
+  font-weight: 850;
+}
+
+.cluster-card {
+  overflow: hidden;
+}
+
+.cluster-table-wrap {
+  max-height: 560px;
+}
+
+.cluster-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cluster-color, var(--blue-ranking-color)) 24%, transparent);
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.cluster-1 {
+  --cluster-color: #6f9ee8;
+}
+
+.cluster-2 {
+  --cluster-color: #66a36f;
+}
+
+.cluster-3 {
+  --cluster-color: #c3943f;
+}
+
+.cluster-4 {
+  --cluster-color: #c86b7a;
+}
+
+.cluster-row th:first-child {
+  border-left: 4px solid var(--cluster-color, var(--blue-ranking-color));
+}
+
+.cluster-vector {
+  white-space: nowrap;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cluster-distance {
+  background: rgba(111, 158, 232, var(--distance-alpha, 0.12));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cluster-table th,
+.cluster-table td {
+  text-align: center;
+}
+
+.cluster-table th:first-child,
+.cluster-table td:first-child {
+  text-align: left;
 }
 
 .oil-grid {
@@ -2212,7 +2405,38 @@ a {
   }
 
   .price-scatter-label {
-    display: none;
+    max-width: 72px;
+    padding: 2px 4px;
+    font-size: 0.5rem;
+  }
+
+  .taste-space-heading,
+  .cluster-heading {
+    display: block;
+  }
+
+  .taste-space-slider {
+    margin-top: 12px;
+  }
+
+  .taste-space-plot,
+  .taste-space-plot svg {
+    min-height: 360px;
+    height: 360px;
+  }
+
+  .taste-axis-label,
+  .taste-tick-label {
+    font-size: 2.9px;
+  }
+
+  .taste-point text {
+    font-size: 2.05px;
+  }
+
+  .cluster-legend {
+    justify-content: flex-start;
+    margin-top: 10px;
   }
 
   .ranking-card-body {
@@ -2233,7 +2457,8 @@ a {
     height: 260px;
   }
 
-  .danger-zone {
+  .danger-zone,
+  .action-zone {
     align-items: stretch;
     flex-direction: column;
   }
@@ -2277,7 +2502,23 @@ a {
   }
 
   .price-scatter-label {
-    display: none;
+    max-width: 58px;
+    font-size: 0.46rem;
+  }
+
+  .taste-space-plot,
+  .taste-space-plot svg {
+    min-height: 330px;
+    height: 330px;
+  }
+
+  .taste-axis-label,
+  .taste-tick-label {
+    font-size: 3.2px;
+  }
+
+  .taste-point text {
+    font-size: 2.12px;
   }
 
   .price-scatter-y-title {
@@ -2409,6 +2650,26 @@ a {
   gap: 18px;
   align-items: center;
   margin-top: 18px;
+}
+
+.action-zone {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.action-zone h2 {
+  margin: 0;
+}
+
+.action-zone .notice {
+  margin-top: 6px;
+}
+
+.action-zone-copy {
+  min-width: 0;
 }
 
 .danger-zone h2 {
@@ -2575,6 +2836,7 @@ a {
   }
 
   .oil-admin-actions .ghost-button,
+  .action-zone .ghost-button,
   .oil-form .save-button {
     width: 100%;
   }
@@ -2607,6 +2869,7 @@ a {
     --accent-strong: #73caa8;
     --overall-ranking-color: #ffffff;
     --neutral-ranking-color: #aa9a6a;
+    --blue-ranking-color: #6f9ee8;
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
   }
 

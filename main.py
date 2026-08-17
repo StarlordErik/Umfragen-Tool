@@ -6,10 +6,10 @@ import json
 import math
 import mimetypes
 import os
+import random
 import re
 import socket
 import sqlite3
-import sys
 import threading
 import uuid
 import webbrowser
@@ -33,7 +33,111 @@ COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
 UPDATE_LOCK = threading.Lock()
 OIL_SELECTION_PASSWORD = "Erik"
-RESULTS_PASSWORD = "Öl"
+RESULTS_PASSWORD = "lol"
+COMPETITIVE_RESULTS_PASSWORD = "rofl"
+
+DUMMY_COMMENTS = [
+    "frisch und klar im Auftakt",
+    "mild mit kurzem Nachklang",
+    "grasig und leicht herb",
+    "rund und angenehm ausgewogen",
+    "etwas flach, aber sauber",
+    "fruchtig mit pfeffriger Spitze",
+    "zurückhaltend und weich",
+    "markant bitter im Finale",
+    "nussig und warm",
+    "grün, frisch und lebendig",
+    "leichte Schärfe am Ende",
+    "wirkt reif und voll",
+    "sanft, fast cremig",
+    "kräutrig und trocken",
+    "fruchtig, aber nicht laut",
+    "leicht metallischer Eindruck",
+    "duftet frisch geschnitten",
+    "schmeckt solide und direkt",
+    "breit und etwas schwer",
+    "angenehm pikant",
+    "zart süßlicher Eindruck",
+    "stark kräuterbetont",
+    "eher neutral gehalten",
+    "sehr weicher Gesamteindruck",
+    "bitterer als erwartet",
+    "klarer Olivencharakter",
+    "wirkt jung und grün",
+    "kurzer, sauberer Abgang",
+    "leichte Mandelnoten",
+    "würzig und präsent",
+    "wenig Tiefe, aber harmonisch",
+    "kräftig im Nachhall",
+    "dezente Fruchtigkeit",
+    "etwas stumpf auf der Zunge",
+    "frisch, aber schnell weg",
+    "angenehme Balance",
+    "dominante Schärfe",
+    "mild und unkompliziert",
+    "sauberer, grüner Duft",
+    "füllig und rund",
+    "leicht kratzig im Abgang",
+    "aromatisch und hell",
+    "wirkt recht hochwertig",
+    "eher alltäglich",
+    "fein bitter, nicht störend",
+    "deutlich grasige Note",
+    "fruchtig mit Tiefe",
+    "trocken und herb",
+    "neutraler Geruch",
+    "samtig und weich",
+    "leicht unreifer Eindruck",
+    "angenehm frisch",
+    "etwas ölig und schwer",
+    "pfeffrig, aber ausgewogen",
+    "kurze grüne Spitze",
+    "mild, fast süß",
+    "deutlich würzig",
+    "sauber, aber wenig komplex",
+    "frischer Kräuterton",
+    "kräftige Bitterkeit",
+    "runder Nachgeschmack",
+    "leichter Apfelton",
+    "wirkt sehr natürlich",
+    "etwas dumpf",
+    "elegant und zurückhaltend",
+    "klare Schärfe",
+    "weiches Mundgefühl",
+    "kräftig grün",
+    "zarte Nussigkeit",
+    "flacher Mittelteil",
+    "schöne Frische",
+    "bisschen zu bitter",
+    "aromatisch dicht",
+    "milder Start, würziges Ende",
+    "grüne Tomatennote",
+    "ausgewogen und sauber",
+    "leicht rau im Finale",
+    "fruchtiger Duft",
+    "recht neutraler Geschmack",
+    "pfeffriger Nachhall",
+    "sanfte Kräuternote",
+    "voll und rund",
+    "etwas künstlicher Eindruck",
+    "frisch und herb",
+    "angenehm nussig",
+    "starkes Aroma",
+    "dezent und sauber",
+    "kräftige grüne Frucht",
+    "wenig Schärfe",
+    "ausdrucksstark, aber harmonisch",
+    "leicht säuerlicher Eindruck",
+    "mildes Alltagsöl",
+    "markanter Geruch",
+    "langer Nachklang",
+    "eher streng",
+    "fruchtig und pfeffrig",
+    "sanfter Geruch",
+    "viel Bitterkeit",
+    "klar und frisch",
+    "schwer einzuordnen",
+]
 
 
 @dataclass
@@ -421,6 +525,63 @@ def remove_oil(config: dict[str, Any], decryption: dict[str, Any], oil_id: str) 
     raise ValueError("Öl nicht gefunden.")
 
 
+def deranged_ciphers(current: list[str], allowed: list[str]) -> list[str]:
+    if len(current) != len(allowed):
+        raise ValueError("Chiffre-Satz passt nicht zur Öl-Auswahl.")
+    if len(current) < 2:
+        return allowed[:]
+
+    rng = random.SystemRandom()
+    shuffled = allowed[:]
+    for _ in range(200):
+        rng.shuffle(shuffled)
+        if all(old != new for old, new in zip(current, shuffled)):
+            return shuffled[:]
+
+    fixed_indexes = [index for index, (old, new) in enumerate(zip(current, shuffled)) if old == new]
+    if len(fixed_indexes) == 1:
+        fixed = fixed_indexes[0]
+        swap_with = 0 if fixed != 0 else 1
+        shuffled[fixed], shuffled[swap_with] = shuffled[swap_with], shuffled[fixed]
+    elif fixed_indexes:
+        first_value = shuffled[fixed_indexes[0]]
+        for left, right in zip(fixed_indexes, fixed_indexes[1:]):
+            shuffled[left] = shuffled[right]
+        shuffled[fixed_indexes[-1]] = first_value
+    return shuffled
+
+
+def shuffle_oil_ciphers(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    updates: list[tuple[str, str, str, str]] = []
+    operation = uuid.uuid4().hex
+
+    for survey in config["surveys"]:
+        survey_id = survey["id"]
+        allowed = list(decryption["cipher_sets"][survey["cipher_set"]])
+        current = [oil.get("ciphers", {}).get(survey_id, "") for oil in decryption["oils"]]
+        shuffled = deranged_ciphers(current, allowed)
+        for index, (oil, new_cipher) in enumerate(zip(decryption["oils"], shuffled)):
+            old_cipher = oil.setdefault("ciphers", {}).get(survey_id)
+            if old_cipher != new_cipher:
+                updates.append((survey_id, str(old_cipher), new_cipher, f"__cipher_shuffle_{operation}_{survey_id}_{index}__"))
+            oil["ciphers"][survey_id] = new_cipher
+
+    validate_decryption(config, decryption)
+    with UPDATE_LOCK, connect_db() as db:
+        for survey_id, old_cipher, _new_cipher, temporary_cipher in updates:
+            db.execute(
+                "UPDATE survey_responses SET cipher = ? WHERE survey_id = ? AND cipher = ?",
+                (temporary_cipher, survey_id, old_cipher),
+            )
+        for survey_id, _old_cipher, new_cipher, temporary_cipher in updates:
+            db.execute(
+                "UPDATE survey_responses SET cipher = ? WHERE survey_id = ? AND cipher = ?",
+                (new_cipher, survey_id, temporary_cipher),
+            )
+        save_decryption(config, decryption)
+    return oil_selection_payload(config, decryption)
+
+
 def delete_oil_responses(config: dict[str, Any], decryption: dict[str, Any], oil_id: str) -> dict[str, Any]:
     oil = next((item for item in decryption["oils"] if item["id"] == oil_id), None)
     if not oil:
@@ -447,6 +608,135 @@ def reset_database() -> dict[str, Any]:
     return {"ok": True, "updated_at": now_iso()}
 
 
+def clamp_to_step(value: float, minimum: float, maximum: float, step: float) -> float:
+    clamped = max(minimum, min(maximum, value))
+    if step > 0:
+        clamped = minimum + round((clamped - minimum) / step) * step
+    return max(minimum, min(maximum, clamped))
+
+
+def dummy_numeric_value(rng: random.SystemRandom, profile: str, field: dict[str, Any]) -> float:
+    minimum = float(field.get("min", 0))
+    maximum = float(field.get("max", 5))
+    step = float(field.get("step", 1))
+    span = max(1.0, maximum - minimum)
+    field_id = field.get("id")
+
+    if profile == "low":
+        ratio = 0.72 if field_id == "bitter" else 0.24
+    elif profile == "high":
+        ratio = 0.18 if field_id == "bitter" else 0.78
+    else:
+        ratio = rng.uniform(0.08, 0.92)
+
+    value = minimum + span * ratio + rng.uniform(-0.12, 0.12) * span
+    return clamp_to_step(value, minimum, maximum, step)
+
+
+def dummy_price_guess(rng: random.SystemRandom, profile: str, oil: dict[str, Any], field: dict[str, Any]) -> float:
+    actual = as_float(oil.get("actual_price_per_liter_eur")) or float(field.get("default", field.get("min", 1)))
+    minimum = float(field.get("min", 1))
+    maximum = float(field.get("max", max_actual_price({"oils": [oil]})))
+    step = float(field.get("step", 1))
+    multiplier = {"low": 0.82, "high": 1.18}.get(profile, rng.uniform(0.72, 1.32))
+    value = actual * multiplier + rng.uniform(-0.12, 0.12) * max(5, actual)
+    return clamp_to_step(value, minimum, maximum, step)
+
+
+def dummy_oil_guess(rng: random.SystemRandom, oil: dict[str, Any], field: dict[str, Any]) -> str:
+    yes_value = field.get("yes_value", "Olivenöl")
+    no_value = field.get("no_value", "Nicht-Olivenöl")
+    correct_is_olive = oil_is_olive_oil(oil)
+    guessed_is_olive = correct_is_olive if rng.random() < 0.82 else not correct_is_olive
+    return yes_value if guessed_is_olive else no_value
+
+
+def dummy_answer_for_field(
+    rng: random.SystemRandom,
+    profile: str,
+    field: dict[str, Any],
+    oil: dict[str, Any],
+    no_comment_value: str,
+) -> Any:
+    field_id = field.get("id")
+    kind = field.get("kind")
+    if field_id == "oil_guess":
+        return dummy_oil_guess(rng, oil, field)
+    if field_id == "price_guess":
+        return dummy_price_guess(rng, profile, oil, field)
+    if kind in {"rating", "range"}:
+        value = dummy_numeric_value(rng, profile, field)
+        return int(value) if float(value).is_integer() else round(value, 2)
+    if kind == "textarea" and field_id == "aroma_profile":
+        return no_comment_value if rng.random() < 0.9 else rng.choice(DUMMY_COMMENTS)
+    if kind == "select":
+        options = field.get("options") or []
+        return rng.choice(options) if options else ""
+    return ""
+
+
+def add_dummy_data(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+    rng = random.SystemRandom()
+    runtime_config = public_runtime_config(config, decryption)
+    sample_lookup = cipher_to_oil(config, decryption)
+    no_comment_value = text_at(load_texts(), ("/umfrage/:id", "no_comment_value"), "kein Kommentar")
+    profiles = [
+        ("niedrig", "low"),
+        ("niedrig", "low"),
+        ("hoch", "high"),
+        ("hoch", "high"),
+        ("zufall", "random"),
+        ("zufall", "random"),
+        ("zufall", "random"),
+        ("zufall", "random"),
+    ]
+    timestamp = now_iso()
+    group_counts: dict[str, int] = {}
+
+    with UPDATE_LOCK, connect_db() as db:
+        for label, profile in profiles:
+            group_counts[label] = group_counts.get(label, 0) + 1
+            token = f"dummy-{uuid.uuid4().hex}"
+            name = f"Dummy {label} {group_counts[label]}"
+            cursor = db.execute(
+                """
+                INSERT INTO respondents (token, ip, user_agent, display_name, publish_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (token, "0.0.0.0", "Dummy-Daten", name, 1, timestamp, timestamp),
+            )
+            respondent_id = int(cursor.lastrowid)
+            for survey in runtime_config["surveys"]:
+                survey_id = survey["id"]
+                for sample in survey.get("samples", []):
+                    oil = sample_lookup.get((survey_id, sample["cipher"]))
+                    if oil is None:
+                        continue
+                    answers = {
+                        field["id"]: dummy_answer_for_field(rng, profile, field, oil, no_comment_value)
+                        for field in survey.get("fields", [])
+                        if field.get("id")
+                    }
+                    db.execute(
+                        """
+                        INSERT INTO survey_responses (
+                            respondent_id, survey_id, cipher, answers_json, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            respondent_id,
+                            survey_id,
+                            sample["cipher"],
+                            json.dumps(answers, ensure_ascii=False),
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+
+    return oil_selection_payload(config, decryption)
+
+
 def require_oil_password(value: Any) -> None:
     if value != OIL_SELECTION_PASSWORD:
         raise ValueError("Passwort ist falsch.")
@@ -454,6 +744,11 @@ def require_oil_password(value: Any) -> None:
 
 def require_results_password(value: Any) -> None:
     if value != RESULTS_PASSWORD:
+        raise ValueError("Passwort ist falsch.")
+
+
+def require_competitive_results_password(value: Any) -> None:
+    if value != COMPETITIVE_RESULTS_PASSWORD:
         raise ValueError("Passwort ist falsch.")
 
 
@@ -811,6 +1106,14 @@ def host_score(host: str) -> tuple[int, str]:
     return (5, host)
 
 
+def network_home_url(port: int) -> str:
+    for origin in local_origins(port):
+        host = urlparse(origin).hostname or ""
+        if re.match(r"^\d+\.\d+\.\d+\.\d+$", host) and host != "127.0.0.1":
+            return f"{origin}/"
+    return f"http://127.0.0.1:{port}/"
+
+
 def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decryption: dict[str, Any], respondent: Respondent) -> str:
     texts = load_texts()
     can_open_surveys = bool(respondent.display_name)
@@ -833,6 +1136,8 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
         )
 
     page_title = route_text(texts, "/", "page_title", "Studie des Oliven-Symposiums")
+    home_subtitle = route_text(texts, "/", "subtitle", "")
+    home_subtitle_html = f'<p class="topbar-subtitle">{html.escape(home_subtitle)}</p>' if home_subtitle else ""
     return page_shell(
         page_title,
         f"""
@@ -840,6 +1145,7 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
           <section class="topbar">
             <div>
               <h1>{html.escape(route_text(texts, '/', 'heading', page_title))}</h1>
+              {home_subtitle_html}
             </div>
           </section>
 
@@ -884,7 +1190,7 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
                 <p class="eyebrow">{html.escape(route_text(texts, '/', 'results_eyebrow', 'Live-Auswertung'))}</p>
                 <h2>{html.escape(route_text(texts, '/', 'results_title', 'Ergebnisse'))}</h2>
               </div>
-              <a class="primary-link" href="/ergebnisse">{html.escape(text_at(texts, ('global', 'open_button'), 'Öffnen'))}</a>
+              <a class="primary-link" href="/ergebnisse">{html.escape(route_text(texts, '/', 'results_open_button', 'Öffnen'))}</a>
             </article>
           </section>
 
@@ -927,8 +1233,16 @@ def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
 
 def render_results_page(config: dict[str, Any], mode: str = "rankings") -> str:
     texts = load_texts()
-    route = "/einzelne-oel-wertungen" if mode == "oils" else "/ergebnisse"
-    page_title = route_text(texts, route, "page_title", "Aufschlüsselung je Öl" if mode == "oils" else "Ergebnisse")
+    if mode == "oils":
+        route = "/einzelne-oel-wertungen"
+        fallback_title = "Aufschlüsselung je Öl"
+    elif mode == "competitive":
+        route = "/kompetitive-verkostung"
+        fallback_title = "kompetitive Verkostung"
+    else:
+        route = "/ergebnisse"
+        fallback_title = "Ergebnisse"
+    page_title = route_text(texts, route, "page_title", fallback_title)
     title = f"{page_title} · {config.get('event', {}).get('title', 'Oliven-Symposium')}"
     return page_shell(
         title,
@@ -1236,7 +1550,273 @@ def ranking_payload(
     return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "color": color, "items": ordered}
 
 
-def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
+def participant_ranking_payload(
+    title: str,
+    values: dict[str, float | None],
+    participants: dict[str, dict[str, Any]],
+    ranks: dict[str, int | None],
+    unit: str,
+    subtitle: str = "",
+    key: str | None = None,
+    color: str | None = None,
+    distributions: dict[str, list[float]] | None = None,
+) -> dict[str, Any]:
+    ordered = sorted(
+        [
+            {
+                "participant_id": participant_id,
+                "name": participants[participant_id]["name"],
+                "value": round(value, 2) if value is not None else None,
+                "rank": ranks.get(participant_id),
+                "box": box_plot((distributions or {}).get(participant_id, [])),
+            }
+            for participant_id, value in values.items()
+            if value is not None and participant_id in participants
+        ],
+        key=lambda item: item["rank"] or 999,
+    )
+    return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "color": color, "items": ordered}
+
+
+def vector_distance(left: list[float], right: list[float]) -> float:
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(left, right)))
+
+
+def cluster_count(item_count: int) -> int:
+    if item_count < 3:
+        return 1
+    if item_count < 7:
+        return 2
+    if item_count < 13:
+        return 3
+    return 4
+
+
+def mean_vector(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    dimensions = len(vectors[0])
+    return [sum(vector[index] for vector in vectors) / len(vectors) for index in range(dimensions)]
+
+
+def kmeans_clusters(vectors: dict[str, list[float]]) -> dict[str, int]:
+    ids = sorted(vectors)
+    if not ids:
+        return {}
+    k = cluster_count(len(ids))
+    centroids = [vectors[min(ids, key=lambda item_id: sum(vectors[item_id]))]]
+    while len(centroids) < k:
+        next_id = max(ids, key=lambda item_id: min(vector_distance(vectors[item_id], centroid) for centroid in centroids))
+        centroids.append(vectors[next_id])
+
+    assignments = {item_id: 0 for item_id in ids}
+    for _ in range(25):
+        changed = False
+        for item_id in ids:
+            cluster = min(range(k), key=lambda index: vector_distance(vectors[item_id], centroids[index]))
+            if assignments.get(item_id) != cluster:
+                assignments[item_id] = cluster
+                changed = True
+        next_centroids = []
+        for cluster in range(k):
+            members = [vectors[item_id] for item_id in ids if assignments.get(item_id) == cluster]
+            next_centroids.append(mean_vector(members) if members else centroids[cluster])
+        centroids = next_centroids
+        if not changed:
+            break
+    return assignments
+
+
+def cluster_payload(
+    title: str,
+    subtitle: str,
+    vectors: dict[str, list[float]],
+    participants: dict[str, dict[str, Any]],
+    unit: str = "Punkte",
+) -> dict[str, Any]:
+    assignments = kmeans_clusters(vectors)
+    ordered_ids = sorted(vectors, key=lambda participant_id: (assignments.get(participant_id, 0), participants[participant_id]["name"]))
+    max_distance = 0.0
+    rows = []
+    for participant_id in ordered_ids:
+        distances = []
+        for other_id in ordered_ids:
+            distance = vector_distance(vectors[participant_id], vectors[other_id])
+            max_distance = max(max_distance, distance)
+            distances.append({"participant_id": other_id, "value": round(distance, 2)})
+        rows.append(
+            {
+                "participant_id": participant_id,
+                "name": participants[participant_id]["name"],
+                "cluster": assignments.get(participant_id, 0) + 1,
+                "vector": [round(value, 2) for value in vectors[participant_id]],
+                "distances": distances,
+            }
+        )
+    return {
+        "title": title,
+        "subtitle": subtitle,
+        "unit": unit,
+        "max_distance": round(max_distance, 2),
+        "items": rows,
+    }
+
+
+def competitive_payload(
+    oils: list[dict[str, Any]],
+    surveys: list[dict[str, Any]],
+    participants: dict[str, dict[str, Any]],
+    texts: dict[str, Any],
+) -> dict[str, Any]:
+    competitive_texts = dict_at(texts, ("/kompetitive-verkostung",))
+    ranking_texts = dict_at(competitive_texts, ("rankings",))
+    cluster_texts = dict_at(competitive_texts, ("clusters",))
+    survey_ids = {survey["id"] for survey in surveys}
+    taste_id = "geschmack" if "geschmack" in survey_ids else (surveys[0]["id"] if surveys else "")
+    smell_id = "geruch" if "geruch" in survey_ids else (surveys[1]["id"] if len(surveys) > 1 else taste_id)
+    experience_id = "gesamt" if "gesamt" in survey_ids else (surveys[2]["id"] if len(surveys) > 2 else smell_id)
+
+    price_accuracy_values = {
+        participant_id: average(stats["price_errors"])
+        for participant_id, stats in participants.items()
+    }
+    price_accuracy_ranks = rank_map(price_accuracy_values, reverse=False)
+    spread_values = {
+        participant_id: population_stdev(stats["overall_values"])
+        for participant_id, stats in participants.items()
+    }
+    spread_ranks = rank_map(spread_values, reverse=False)
+    average_overall_values = {
+        participant_id: average(stats["overall_values"])
+        for participant_id, stats in participants.items()
+    }
+    average_overall_ranks = rank_map(average_overall_values, reverse=True)
+    classification_values = {
+        participant_id: (
+            stats["guess_correct"] / stats["guess_total"]
+            if stats["guess_total"]
+            else None
+        )
+        for participant_id, stats in participants.items()
+    }
+    classification_ranks = rank_map(classification_values, reverse=False)
+    bitter_values = {
+        participant_id: average(stats["bitter_values"])
+        for participant_id, stats in participants.items()
+    }
+    bitter_ranks = rank_map(bitter_values, reverse=False)
+
+    coordinate_oils = []
+    participant_vectors: dict[str, list[float]] = {}
+    for oil in oils:
+        oil_id = oil["id"]
+        points = []
+        for participant_id, stats in participants.items():
+            vector_by_survey = stats["vectors_by_oil"].get(oil_id, {})
+            if not all(key in vector_by_survey for key in (taste_id, smell_id, experience_id)):
+                continue
+            vector = [
+                float(vector_by_survey[taste_id]),
+                float(vector_by_survey[smell_id]),
+                float(vector_by_survey[experience_id]),
+            ]
+            points.append(
+                {
+                    "participant_id": participant_id,
+                    "name": stats["name"],
+                    "x": round(vector[0], 2),
+                    "y": round(vector[1], 2),
+                    "z": round(vector[2], 2),
+                }
+            )
+        coordinate_oils.append({"oil_id": oil_id, "name": oil["name"], "points": sorted(points, key=lambda item: item["name"])})
+
+    for participant_id, stats in participants.items():
+        complete_vectors = []
+        for vector_by_survey in stats["vectors_by_oil"].values():
+            if all(key in vector_by_survey for key in (taste_id, smell_id, experience_id)):
+                complete_vectors.append(
+                    [
+                        float(vector_by_survey[taste_id]),
+                        float(vector_by_survey[smell_id]),
+                        float(vector_by_survey[experience_id]),
+                    ]
+                )
+        if complete_vectors:
+            participant_vectors[participant_id] = mean_vector(complete_vectors)
+
+    return {
+        "rankings": [
+            participant_ranking_payload(
+                ranking_texts.get("price_accuracy_title", "Preis-Schätzgenauigkeit"),
+                price_accuracy_values,
+                participants,
+                price_accuracy_ranks,
+                "€",
+                ranking_texts.get("price_accuracy_subtitle", "mittlere absolute Abweichung, niedrigste zuerst"),
+                key="price_accuracy",
+                distributions={participant_id: stats["price_errors"] for participant_id, stats in participants.items()},
+            ),
+            participant_ranking_payload(
+                ranking_texts.get("participant_spread_title", "individuelle Streuung über alle Proben"),
+                spread_values,
+                participants,
+                spread_ranks,
+                "σ",
+                ranking_texts.get("participant_spread_subtitle", "niedrigste Streuung zuerst"),
+                key="participant_spread",
+                distributions={participant_id: stats["overall_values"] for participant_id, stats in participants.items()},
+            ),
+            {
+                **participant_ranking_payload(
+                    ranking_texts.get("average_overall_title", "Durchschnittliche Wertung"),
+                    average_overall_values,
+                    participants,
+                    average_overall_ranks,
+                    "Punkte",
+                    ranking_texts.get("average_overall_subtitle", "höchste durchschnittliche Bewertung zuerst"),
+                    key="participant_average_overall",
+                    distributions={participant_id: stats["overall_values"] for participant_id, stats in participants.items()},
+                ),
+                "crowns": False,
+            },
+            {
+                **participant_ranking_payload(
+                    ranking_texts.get("classification_title", "Klassifizierungsquote"),
+                    classification_values,
+                    participants,
+                    classification_ranks,
+                    "%",
+                    ranking_texts.get("classification_subtitle", "niedrigste Trefferquote zuerst"),
+                    key="participant_classification",
+                ),
+                "crowns": False,
+            },
+            {
+                **participant_ranking_payload(
+                    ranking_texts.get("bitter_title", "niedrigste Bitterkeits-Bewertungen"),
+                    bitter_values,
+                    participants,
+                    bitter_ranks,
+                    "Punkte",
+                    ranking_texts.get("bitter_subtitle", "niedrigste Bitterkeit zuerst"),
+                    key="participant_bitter",
+                    distributions={participant_id: stats["bitter_values"] for participant_id, stats in participants.items()},
+                ),
+                "crowns": False,
+            },
+        ],
+        "coordinate_oils": coordinate_oils,
+        "clusters": cluster_payload(
+            cluster_texts.get("preference_title", "Clusteranalyse: Gesamteindruck"),
+            cluster_texts.get("preference_subtitle", "mittlerer 3D-Vektor aus Geschmack, Geruch und voller Erfahrung"),
+            participant_vectors,
+            participants,
+        ),
+    }
+
+
+def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_competitive: bool = False) -> dict[str, Any]:
     texts = load_texts()
     ranking_texts = dict_at(texts, ("/ergebnisse", "rankings"))
     no_comment_value = text_at(texts, ("/umfrage/:id", "no_comment_value"), "kein Kommentar").casefold()
@@ -1272,6 +1852,8 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
             "comments": [],
         }
 
+    participant_stats: dict[str, dict[str, Any]] = {}
+
     with connect_db() as db:
         response_rows = db.execute(
             """
@@ -1293,7 +1875,21 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
             continue
 
         oil_id = oil["id"]
-        tester_ids.add(int(row["respondent_id"]))
+        respondent_id = int(row["respondent_id"])
+        participant_id = str(respondent_id)
+        tester_ids.add(respondent_id)
+        participant = participant_stats.setdefault(
+            participant_id,
+            {
+                "name": str(row["display_name"] or "").strip() or f"Proband {participant_id}",
+                "overall_values": [],
+                "bitter_values": [],
+                "price_errors": [],
+                "guess_correct": 0,
+                "guess_total": 0,
+                "vectors_by_oil": {},
+            },
+        )
         oil_stats[oil_id]["response_count"] += 1
         try:
             answers = json.loads(row["answers_json"])
@@ -1304,11 +1900,14 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         if overall is not None:
             oil_stats[oil_id]["overall"].append(overall)
             oil_stats[oil_id]["overall_by_survey"][survey_id].append(overall)
-            oil_stats[oil_id]["overall_by_respondent"].setdefault(int(row["respondent_id"]), []).append(overall)
+            oil_stats[oil_id]["overall_by_respondent"].setdefault(respondent_id, []).append(overall)
+            participant["overall_values"].append(overall)
+            participant["vectors_by_oil"].setdefault(oil_id, {})[survey_id] = overall
 
         bitter = as_float(answers.get("bitter"))
         if bitter is not None and "bitter" in field_lookup.get(survey_id, {}):
             oil_stats[oil_id]["bitter"].append(bitter)
+            participant["bitter_values"].append(bitter)
 
         price_guess = as_float(answers.get("price_guess"))
         if price_guess is not None and "price_guess" in field_lookup.get(survey_id, {}):
@@ -1317,14 +1916,17 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
             if actual_price is not None:
                 deviation = price_guess - actual_price
                 oil_stats[oil_id]["price_deviation"].append(deviation)
+                participant["price_errors"].append(abs(deviation))
                 if actual_price > 0:
                     oil_stats[oil_id]["price_deviation_percent"].append((deviation / actual_price) * 100)
 
         guess = answers.get("oil_guess")
         if guess:
             oil_stats[oil_id]["guess_total"] += 1
+            participant["guess_total"] += 1
             if guess_matches_oil(guess, oil):
                 oil_stats[oil_id]["guess_correct"] += 1
+                participant["guess_correct"] += 1
 
         comment = str(answers.get("aroma_profile") or "").strip()
         if comment and comment.casefold() != no_comment_value:
@@ -1589,7 +2191,7 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
     response_count = sum(oil_stats[oil_id]["response_count"] for oil_id in oil_order)
     expected_responses = len(tester_ids) * total_samples if tester_ids else 0
 
-    return {
+    payload = {
         "ok": True,
         "config": {
             "event": config.get("event", {}),
@@ -1614,13 +2216,16 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[s
         "oils": oil_payload,
         "server_time": now_iso(),
     }
+    if include_competitive:
+        payload["competitive"] = competitive_payload(oils, surveys, participant_stats, texts)
+    return payload
 
 
 class OilSurveyHandler(BaseHTTPRequestHandler):
     server_version = "OilSurvey/2.0"
 
     def log_message(self, format: str, *args: Any) -> None:
-        sys.stdout.write("- - [%s] %s\n" % (self.log_date_time_string(), format % args))
+        return
 
     def do_GET(self) -> None:
         try:
@@ -1676,6 +2281,10 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_html(self, 200, render_results_page(config, "oils"))
             return
 
+        if path == "/kompetitive-verkostung":
+            send_html(self, 200, render_results_page(config, "competitive"))
+            return
+
         if path == "/oel-auswahl":
             send_html(self, 200, render_oil_selection_page(config))
             return
@@ -1695,9 +2304,14 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/results":
-            require_results_password(query.get("password", [""])[0])
+            access_scope = query.get("access", query.get("mode", ["results"]))[0]
+            include_competitive = access_scope == "competitive"
+            if include_competitive:
+                require_competitive_results_password(query.get("password", [""])[0])
+            else:
+                require_results_password(query.get("password", [""])[0])
             decryption = load_decryption(config)
-            send_json(self, 200, result_payload(config, decryption))
+            send_json(self, 200, result_payload(config, decryption, include_competitive=include_competitive))
             return
 
         if path == "/api/oils":
@@ -1750,6 +2364,24 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             require_oil_password(payload.get("password"))
             decryption = load_decryption(config)
             send_json(self, 200, update_oil(config, decryption, payload))
+            return
+
+        if path == "/api/oils/shuffle-ciphers":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, shuffle_oil_ciphers(config, decryption))
+            return
+
+        if path == "/api/oils/add-dummy-data":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, add_dummy_data(config, decryption))
             return
 
         if path == "/api/oils/clear":
@@ -1819,20 +2451,11 @@ def find_open_port(host: str, preferred: int) -> int:
 def run_server(host: str, port: int, open_browser: bool) -> None:
     init_db()
     config = load_config()
-    decryption = load_decryption(config)
+    load_decryption(config)
     actual_port = find_open_port(host, port)
     server = ThreadingHTTPServer((host, actual_port), OilSurveyHandler)
-    origin = f"http://localhost:{actual_port}"
 
-    print("\nOliven-Symposium läuft.")
-    print("Seiten:")
-    for survey in public_runtime_config(config, decryption)["surveys"]:
-        print(f"  {survey.get('short_title', survey['id'])}: {origin}/umfrage/{survey['id']}")
-    print(f"  Startseite: {origin}/")
-    print(f"  Ergebnisse: {origin}/ergebnisse")
-    print(f"  Aufschlüsselung je Öl: {origin}/einzelne-oel-wertungen")
-    print(f"  Öl-Auswahl: {origin}/oel-auswahl")
-    print("\nBeenden mit Strg+C.\n")
+    print(network_home_url(actual_port), flush=True)
 
     if open_browser:
         threading.Timer(0.75, lambda: webbrowser.open(f"http://localhost:{actual_port}/")).start()

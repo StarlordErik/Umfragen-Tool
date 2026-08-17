@@ -144,7 +144,7 @@ function renderSampleTab(sample) {
     <article class="sample-card sample-tab ${open ? "open" : ""} ${complete ? "complete" : ""}" data-cipher="${escapeHtml(sample.cipher)}">
       <button class="sample-header ${showTitle ? "" : "badge-only"}" type="button" data-action="toggle" data-cipher="${escapeHtml(sample.cipher)}">
         <span class="cipher-badge">${escapeHtml(cipherBadge(sample.cipher))}</span>
-        ${showTitle ? `<span class="sample-title"><h2>${escapeHtml(sample.cipher)}</h2></span>` : ""}
+        ${showTitle ? `<span class="sample-title"><h2>${escapeHtml(cipherBadge(sample.cipher))}</h2></span>` : ""}
         <span class="status-pill" data-status="${escapeHtml(sample.cipher)}">${complete ? escapeHtml(surveyText("complete", "fertig")) : escapeHtml(surveyText("incomplete", "offen"))}</span>
       </button>
     </article>

@@ -5,6 +5,33 @@ const state = {
   payload: null,
 };
 
+const greekSymbols = {
+  Alpha: "α",
+  Beta: "β",
+  Gamma: "γ",
+  Delta: "δ",
+  Epsilon: "ε",
+  Zeta: "ζ",
+  Eta: "η",
+  Theta: "θ",
+  Iota: "ι",
+  Kappa: "κ",
+  Lambda: "λ",
+  Mu: "μ",
+  Nu: "ν",
+  Xi: "ξ",
+  Omikron: "ο",
+  Pi: "π",
+  Rho: "ρ",
+  Sigma: "σ",
+  Tau: "τ",
+  Ypsilon: "υ",
+  Phi: "φ",
+  Chi: "χ",
+  Psi: "ψ",
+  Omega: "ω",
+};
+
 function text(path, fallback = "") {
   let node = window.UI_TEXTS || {};
   for (const key of path) {
@@ -32,6 +59,11 @@ const escapeHtml = (value) =>
 
 const euro = (value) => (value === null || value === undefined ? "Realpreis unbekannt" : `${Number(value).toFixed(0)} €/l`);
 
+function displayCipher(cipher, cipherSet = "") {
+  if (cipherSet === "greek") return greekSymbols[cipher] || cipher;
+  return cipher || "-";
+}
+
 function renderLogin(error = "") {
   app.innerHTML = `
     <section class="admin-header">
@@ -44,7 +76,18 @@ function renderLogin(error = "") {
     </section>
 
     <form class="setup-editor oil-login-panel" action="/oel-auswahl/login" method="post" data-login-form="oil-selection">
-      <label>
+      <label class="visually-hidden" for="oil-selection-login-realm">
+        Anmeldebereich
+        <input
+          id="oil-selection-login-realm"
+          name="oil-selection-login-realm"
+          type="text"
+          value="oel-auswahl"
+          autocomplete="username"
+          tabindex="-1"
+        >
+      </label>
+      <label for="oil-password">
         ${escapeHtml(globalText("password_label", "Passwort"))}
         <input id="oil-password" name="oil-selection-password" type="password" autocomplete="section-oil-selection current-password" autofocus>
       </label>
@@ -110,6 +153,22 @@ function renderOils(message = "") {
       <p class="notice ${message.startsWith(globalText("error_prefix", "Fehler")) ? "error" : ""}">${escapeHtml(message || (canAdd ? " " : routeText("no_placeholders", "Keine freien Platzhalter mehr.")))}</p>
     </section>
 
+    <section class="setup-editor action-zone">
+      <div class="action-zone-copy">
+        <h2>${escapeHtml(routeText("cipher_heading", "Chiffres"))}</h2>
+        <p class="notice">${escapeHtml(routeText("cipher_notice", "Mischt alle Chiffres neu, inklusive der freien Platzhalter."))}</p>
+      </div>
+      <button class="ghost-button" type="button" data-action="shuffle-ciphers">${escapeHtml(routeText("shuffle_ciphers_button", "Chiffres neu mischen"))}</button>
+    </section>
+
+    <section class="setup-editor action-zone">
+      <div class="action-zone-copy">
+        <h2>${escapeHtml(routeText("dummy_heading", "Dummy-Daten"))}</h2>
+        <p class="notice">${escapeHtml(routeText("dummy_notice", "Ergänzt 8 vollständig ausgefüllte Test-Probanden für alle aktiven Öle."))}</p>
+      </div>
+      <button class="ghost-button" type="button" data-action="add-dummy-data">${escapeHtml(routeText("dummy_data_button", "Dummy-Daten ergänzen"))}</button>
+    </section>
+
     <section class="oil-admin-list">
       ${activeOils.map(renderOilRow).join("")}
     </section>
@@ -140,9 +199,9 @@ function renderOilRow(oil) {
         </div>
         <p class="metric-sub">${escapeHtml(oil.type)} · ${escapeHtml(euro(oil.actual_price_per_liter_eur))} · ${escapeHtml(oil.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</p>
         <div class="cipher-mini-row">
-          <span>${escapeHtml(routeText("taste_cipher", "Geschmack"))}: ${escapeHtml(oil.ciphers.geschmack || "-")}</span>
-          <span>${escapeHtml(routeText("smell_cipher", "Geruch"))}: ${escapeHtml(oil.ciphers.geruch || "-")}</span>
-          <span>${escapeHtml(routeText("experience_cipher", "Erfahrung"))}: ${escapeHtml(oil.ciphers.gesamt || "-")}</span>
+          <span>${escapeHtml(routeText("taste_cipher", "Geschmack"))}: ${escapeHtml(displayCipher(oil.ciphers.geschmack, "greek"))}</span>
+          <span>${escapeHtml(routeText("smell_cipher", "Geruch"))}: ${escapeHtml(displayCipher(oil.ciphers.geruch, "latin"))}</span>
+          <span>${escapeHtml(routeText("experience_cipher", "Erfahrung"))}: ${escapeHtml(displayCipher(oil.ciphers.gesamt, "number"))}</span>
         </div>
       </div>
       <div class="oil-admin-actions">
@@ -216,6 +275,26 @@ async function handleClick(event) {
     const oilId = target.dataset.oilId;
     if (!confirm(routeText("confirm_remove", "Dieses Öl entfernen und den Slot wieder als Platzhalter freigeben?"))) return;
     await postAction("/api/oils/remove", { oil_id: oilId });
+  }
+
+  if (action === "shuffle-ciphers") {
+    if (!confirm(routeText("confirm_shuffle_ciphers", "Alle Chiffres inklusive freier Platzhalter neu mischen?"))) return;
+    try {
+      await postAction("/api/oils/shuffle-ciphers", {});
+      renderOils(routeText("ciphers_shuffled", "Chiffres neu gemischt."));
+    } catch (error) {
+      renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
+    }
+  }
+
+  if (action === "add-dummy-data") {
+    if (!confirm(routeText("confirm_dummy_data", "8 vollständig ausgefüllte Dummy-Probanden ergänzen?"))) return;
+    try {
+      await postAction("/api/oils/add-dummy-data", {});
+      renderOils(routeText("dummy_data_added", "Dummy-Daten ergänzt."));
+    } catch (error) {
+      renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
+    }
   }
 
   if (action === "reset-db") {
