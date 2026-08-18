@@ -90,9 +90,9 @@
       "price_source": "https://www.buttinale73.com/en",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Theta",
-        "geruch": "V",
-        "gesamt": "14"
+        "geschmack": "Delta",
+        "geruch": "N",
+        "gesamt": "13"
       }
     },
     {
@@ -104,9 +104,9 @@
       "price_source": "https://shop.bioplanete.de/olivenoel-mild-nativ-extra",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Rho",
-        "geruch": "J",
-        "gesamt": "13"
+        "geschmack": "Mu",
+        "geruch": "O",
+        "gesamt": "21"
       }
     },
     {
@@ -118,9 +118,9 @@
       "price_source": "https://www.knuspr.de/41041-carapelli-bio-natives-olivenoel-extra",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Omikron",
-        "geruch": "T",
-        "gesamt": "16"
+        "geschmack": "Tau",
+        "geruch": "J",
+        "gesamt": "23"
       }
     },
     {
@@ -132,9 +132,9 @@
       "price_source": "Öl-Auswahl",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Delta",
-        "geruch": "K",
-        "gesamt": "2"
+        "geschmack": "Omikron",
+        "geruch": "F",
+        "gesamt": "20"
       }
     },
     {
@@ -146,24 +146,24 @@
       "price_source": "https://sivix.com/de-DE/catalogue/products/rewe-bio-natives-olivenol-extra-0-75-l-rewe-whIqw2cQTOeeJSAD",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Mu",
-        "geruch": "O",
-        "gesamt": "12"
+        "geschmack": "Beta",
+        "geruch": "V",
+        "gesamt": "11"
       }
     },
     {
       "id": "ja-raps",
-      "name": "ja! Rapsöl",
+      "name": "Bellasan Rapsöl",
       "type": "Nicht-Olivenöl",
       "is_olive_oil": false,
       "actual_price_per_liter_eur": 2,
-      "price_source": "https://www.hit.de/sortiment/gewuerze-saucen-oel/speiseoel-rapsoel-4261492/bertolli-raps-mit-olive-000000000002116715ST",
+      "price_source": "Öl-Auswahl",
       "baseline": true,
       "implemented": true,
       "ciphers": {
-        "geschmack": "Zeta",
-        "geruch": "U",
-        "gesamt": "5"
+        "geschmack": "Gamma",
+        "geruch": "X",
+        "gesamt": "2"
       }
     },
     {
@@ -175,9 +175,9 @@
       "price_source": "https://thessaloniki.shopdutyfree.com/en/103/minerva-horio-koroneiki-variety-olive-oil-75cl",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Ypsilon",
-        "geruch": "G",
-        "gesamt": "3"
+        "geschmack": "Epsilon",
+        "geruch": "W",
+        "gesamt": "4"
       }
     },
     {
@@ -189,9 +189,9 @@
       "price_source": "Nutzerangabe",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Chi",
-        "geruch": "M",
-        "gesamt": "20"
+        "geschmack": "Omega",
+        "geruch": "E",
+        "gesamt": "14"
       }
     },
     {
@@ -203,42 +203,51 @@
       "price_source": "https://frantoioveronesi.com/it/product/tartufo-bianco/30293",
       "implemented": true,
       "ciphers": {
-        "geschmack": "Alpha",
-        "geruch": "Q",
-        "gesamt": "19"
+        "geschmack": "Ypsilon",
+        "geruch": "G",
+        "gesamt": "5"
       }
     },
     {
-      "id": "platzhalter-01",
-      "name": "Platzhalter 01",
-      "type": "Platzhalter",
-      "implemented": false,
+      "id": "bellasan-natives-olivenoel-extra",
+      "name": "Bellasan Natives Olivenöl extra",
+      "type": "Olivenöl",
+      "is_olive_oil": true,
+      "actual_price_per_liter_eur": 8,
+      "price_source": "Öl-Auswahl",
+      "implemented": true,
       "ciphers": {
-        "geschmack": "Eta",
-        "geruch": "I",
-        "gesamt": "1"
-      }
-    },
-    {
-      "id": "platzhalter-02",
-      "name": "Platzhalter 02",
-      "type": "Platzhalter",
-      "implemented": false,
-      "ciphers": {
-        "geschmack": "Tau",
-        "geruch": "E",
+        "geschmack": "Chi",
+        "geruch": "T",
         "gesamt": "18"
       }
     },
     {
-      "id": "platzhalter-03",
-      "name": "Platzhalter 03",
-      "type": "Platzhalter",
-      "implemented": false,
+      "id": "aldi-bio-leinoel",
+      "name": "Aldi Bio Leinöl",
+      "type": "Nicht-Olivenöl",
+      "is_olive_oil": false,
+      "actual_price_per_liter_eur": 5,
+      "price_source": "Öl-Auswahl",
+      "implemented": true,
       "ciphers": {
-        "geschmack": "Beta",
-        "geruch": "S",
-        "gesamt": "8"
+        "geschmack": "Zeta",
+        "geruch": "Q",
+        "gesamt": "3"
+      }
+    },
+    {
+      "id": "bertolli-originale-natives-olivenoel-extra",
+      "name": "Bertolli Originale Natives Olivenöl Extra",
+      "type": "Olivenöl",
+      "is_olive_oil": true,
+      "actual_price_per_liter_eur": 16,
+      "price_source": "Öl-Auswahl",
+      "implemented": true,
+      "ciphers": {
+        "geschmack": "Xi",
+        "geruch": "A",
+        "gesamt": "17"
       }
     },
     {
@@ -247,9 +256,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Iota",
-        "geruch": "B",
-        "gesamt": "22"
+        "geschmack": "Pi",
+        "geruch": "R",
+        "gesamt": "8"
       }
     },
     {
@@ -258,9 +267,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Pi",
-        "geruch": "L",
-        "gesamt": "9"
+        "geschmack": "Phi",
+        "geruch": "I",
+        "gesamt": "15"
       }
     },
     {
@@ -269,9 +278,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Nu",
-        "geruch": "R",
-        "gesamt": "10"
+        "geschmack": "Eta",
+        "geruch": "L",
+        "gesamt": "12"
       }
     },
     {
@@ -280,9 +289,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Phi",
-        "geruch": "H",
-        "gesamt": "11"
+        "geschmack": "Sigma",
+        "geruch": "D",
+        "gesamt": "19"
       }
     },
     {
@@ -291,9 +300,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Kappa",
-        "geruch": "D",
-        "gesamt": "24"
+        "geschmack": "Alpha",
+        "geruch": "C",
+        "gesamt": "9"
       }
     },
     {
@@ -302,9 +311,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Omega",
-        "geruch": "X",
-        "gesamt": "7"
+        "geschmack": "Lambda",
+        "geruch": "P",
+        "gesamt": "6"
       }
     },
     {
@@ -313,9 +322,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Sigma",
-        "geruch": "A",
-        "gesamt": "15"
+        "geschmack": "Rho",
+        "geruch": "K",
+        "gesamt": "24"
       }
     },
     {
@@ -324,9 +333,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Xi",
-        "geruch": "F",
-        "gesamt": "21"
+        "geschmack": "Nu",
+        "geruch": "M",
+        "gesamt": "1"
       }
     },
     {
@@ -335,9 +344,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Lambda",
-        "geruch": "W",
-        "gesamt": "17"
+        "geschmack": "Kappa",
+        "geruch": "H",
+        "gesamt": "22"
       }
     },
     {
@@ -346,9 +355,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Psi",
-        "geruch": "N",
-        "gesamt": "6"
+        "geschmack": "Theta",
+        "geruch": "S",
+        "gesamt": "10"
       }
     },
     {
@@ -357,9 +366,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Epsilon",
-        "geruch": "P",
-        "gesamt": "4"
+        "geschmack": "Iota",
+        "geruch": "U",
+        "gesamt": "16"
       }
     },
     {
@@ -368,9 +377,9 @@
       "type": "Platzhalter",
       "implemented": false,
       "ciphers": {
-        "geschmack": "Gamma",
-        "geruch": "C",
-        "gesamt": "23"
+        "geschmack": "Psi",
+        "geruch": "B",
+        "gesamt": "7"
       }
     }
   ]
