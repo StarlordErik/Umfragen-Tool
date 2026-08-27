@@ -64,6 +64,22 @@ function displayCipher(cipher, cipherSet = "") {
   return cipher || "-";
 }
 
+function participantOptions(selectedId = "") {
+  const selected = String(selectedId || "");
+  const participants = state.payload?.participants || [];
+  return [
+    `<option value="">${escapeHtml(routeText("owner_empty", "nicht zugeordnet"))}</option>`,
+    ...participants.map((participant) => {
+      const value = String(participant.id);
+      return `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(participant.display_name)}</option>`;
+    }),
+  ].join("");
+}
+
+function ownerName(value) {
+  return value || routeText("owner_empty", "nicht zugeordnet");
+}
+
 function renderLogin(error = "") {
   app.innerHTML = `
     <section class="admin-header">
@@ -124,6 +140,8 @@ function renderOils(message = "") {
       <a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a>
     </section>
 
+    ${renderParticipantPanel(payload.participants || [])}
+
     <section class="setup-editor add-oil-panel">
       <h2>${escapeHtml(routeText("add_heading", "Öl hinzufügen"))}</h2>
       <div class="oil-form">
@@ -134,6 +152,12 @@ function renderOils(message = "") {
         <label>
           ${escapeHtml(routeText("price_label", "Preis pro Liter"))}
           <input id="new-oil-price" type="number" min="1" step="1" placeholder="${escapeHtml(routeText("price_placeholder", "€ pro Liter"))}" ${canAdd ? "" : "disabled"}>
+        </label>
+        <label>
+          ${escapeHtml(routeText("owner_label", "Mitgebracht von"))}
+          <select id="new-oil-owner" ${canAdd ? "" : "disabled"}>
+            ${participantOptions()}
+          </select>
         </label>
         <fieldset class="oil-type-field">
           <legend>${escapeHtml(routeText("is_olive_question", "Ist das ein Olivenöl?"))}</legend>
@@ -183,6 +207,50 @@ function renderOils(message = "") {
   `;
 }
 
+function renderParticipantPanel(participants) {
+  return `
+    <section class="setup-editor participant-admin-panel">
+      <div class="participant-admin-heading">
+        <div>
+          <h2>${escapeHtml(routeText("participants_heading", "Probanden"))}</h2>
+          <p class="notice">${escapeHtml(routeText("participants_notice", "Namen aus der Startseite erscheinen automatisch."))}</p>
+        </div>
+      </div>
+      <div class="participant-add-row">
+        <label>
+          ${escapeHtml(routeText("participant_name_label", "Name"))}
+          <input id="new-participant-name" type="text" maxlength="80" placeholder="${escapeHtml(routeText("participant_name_placeholder", "Name hinzufügen"))}">
+        </label>
+        <label class="check-option participant-publish-option">
+          <input id="new-participant-publish" type="checkbox" checked>
+          <span>${escapeHtml(routeText("participant_publish_label", "Name veröffentlichen"))}</span>
+        </label>
+        <button class="save-button" type="button" data-action="add-participant">${escapeHtml(routeText("participant_add_button", "Proband hinzufügen"))}</button>
+      </div>
+      <div class="participant-admin-list">
+        ${participants.length ? participants.map(renderParticipantRow).join("") : `<p class="notice">${escapeHtml(routeText("participants_empty", "Noch keine Probanden."))}</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderParticipantRow(participant) {
+  return `
+    <div class="participant-admin-row" data-participant-id="${escapeHtml(participant.id)}">
+      <label>
+        ${escapeHtml(routeText("participant_name_label", "Name"))}
+        <input type="text" maxlength="80" value="${escapeHtml(participant.display_name)}" data-participant-field="name">
+      </label>
+      <label class="check-option participant-publish-option">
+        <input type="checkbox" data-participant-field="publish" ${participant.publish_name ? "checked" : ""}>
+        <span>${escapeHtml(routeText("participant_publish_label", "Name veröffentlichen"))}</span>
+      </label>
+      <span class="participant-rating-count">${escapeHtml(participant.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</span>
+      <button class="ghost-button" type="button" data-action="update-participant" data-participant-id="${escapeHtml(participant.id)}">${escapeHtml(routeText("save_button", "Speichern"))}</button>
+    </div>
+  `;
+}
+
 function renderOilRow(oil) {
   return `
     <article class="oil-admin-row">
@@ -196,8 +264,14 @@ function renderOilRow(oil) {
             ${escapeHtml(routeText("price_label", "Preis pro Liter"))}
             <input type="number" min="1" step="1" value="${escapeHtml(oil.actual_price_per_liter_eur ?? "")}" data-edit-field="price" data-oil-id="${escapeHtml(oil.id)}">
           </label>
+          <label>
+            ${escapeHtml(routeText("owner_label", "Mitgebracht von"))}
+            <select data-edit-field="owner" data-oil-id="${escapeHtml(oil.id)}">
+              ${participantOptions(oil.brought_by_respondent_id)}
+            </select>
+          </label>
         </div>
-        <p class="metric-sub">${escapeHtml(oil.type)} · ${escapeHtml(euro(oil.actual_price_per_liter_eur))} · ${escapeHtml(oil.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</p>
+        <p class="metric-sub">${escapeHtml(oil.type)} · ${escapeHtml(euro(oil.actual_price_per_liter_eur))} · ${escapeHtml(routeText("owner_label", "Mitgebracht von"))}: ${escapeHtml(ownerName(oil.brought_by_name))} · ${escapeHtml(oil.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</p>
         <div class="cipher-mini-row">
           <span>${escapeHtml(routeText("taste_cipher", "Geschmack"))}: ${escapeHtml(displayCipher(oil.ciphers.geschmack, "greek"))}</span>
           <span>${escapeHtml(routeText("smell_cipher", "Geruch"))}: ${escapeHtml(displayCipher(oil.ciphers.geruch, "latin"))}</span>
@@ -243,10 +317,35 @@ async function handleClick(event) {
   if (action === "add-oil") {
     const name = document.getElementById("new-oil-name")?.value.trim() || "";
     const price = document.getElementById("new-oil-price")?.value || "";
+    const owner = document.getElementById("new-oil-owner")?.value || "";
     const isOliveOil = Boolean(document.getElementById("new-oil-olive-yes")?.checked);
     try {
-      await postAction("/api/oils/add", { name, actual_price_per_liter_eur: price, is_olive_oil: isOliveOil });
+      await postAction("/api/oils/add", { name, actual_price_per_liter_eur: price, is_olive_oil: isOliveOil, brought_by_respondent_id: owner });
       renderOils(routeText("oil_added", "Öl hinzugefügt."));
+    } catch (error) {
+      renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
+    }
+  }
+
+  if (action === "add-participant") {
+    const name = document.getElementById("new-participant-name")?.value.trim() || "";
+    const publish = Boolean(document.getElementById("new-participant-publish")?.checked);
+    try {
+      await postAction("/api/oils/participants/add", { display_name: name, publish_name: publish });
+      renderOils(routeText("participant_added", "Proband hinzugefügt."));
+    } catch (error) {
+      renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
+    }
+  }
+
+  if (action === "update-participant") {
+    const participantId = target.dataset.participantId;
+    const row = target.closest(".participant-admin-row");
+    const name = row?.querySelector('[data-participant-field="name"]')?.value.trim() || "";
+    const publish = Boolean(row?.querySelector('[data-participant-field="publish"]')?.checked);
+    try {
+      await postAction("/api/oils/participants/update", { participant_id: participantId, display_name: name, publish_name: publish });
+      renderOils(routeText("participant_saved", "Proband gespeichert."));
     } catch (error) {
       renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
     }
@@ -257,8 +356,9 @@ async function handleClick(event) {
     const row = target.closest(".oil-admin-row");
     const name = row?.querySelector('[data-edit-field="name"]')?.value.trim() || "";
     const price = row?.querySelector('[data-edit-field="price"]')?.value || "";
+    const owner = row?.querySelector('[data-edit-field="owner"]')?.value || "";
     try {
-      await postAction("/api/oils/update", { oil_id: oilId, name, actual_price_per_liter_eur: price });
+      await postAction("/api/oils/update", { oil_id: oilId, name, actual_price_per_liter_eur: price, brought_by_respondent_id: owner });
       renderOils(routeText("oil_saved", "Öl gespeichert."));
     } catch (error) {
       renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
@@ -328,6 +428,10 @@ app.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && event.target?.id === "oil-password") {
     event.preventDefault();
     app.querySelector('[data-action="login"]')?.click();
+  }
+  if (event.key === "Enter" && event.target?.id === "new-participant-name") {
+    event.preventDefault();
+    app.querySelector('[data-action="add-participant"]')?.click();
   }
 });
 

@@ -16,6 +16,6 @@ Wichtige Seiten:
 - `/einzelne-oel-wertungen` zeigt die geschützte Aufschlüsselung je Öl mit Chiffren-Auflösung und Spoiler-Schutz.
 - `/oel-auswahl` verwaltet die aktive Öl-Auswahl nach Passwort-Eingabe.
 
-Antworten liegen lokal in `data/umfragen.sqlite3`. Probanden werden anonym per Cookie und optional per Name wiedererkannt, sodass sie weiterarbeiten können.
+Antworten, Probanden, Öle und deren Chiffre-Zuordnungen liegen lokal in `data/umfragen.sqlite3`. Probanden werden anonym per Cookie und optional per Name wiedererkannt, sodass sie weiterarbeiten können. Öle und ihre Zuordnung zu Probanden werden über die Öl-Auswahl verwaltet; dafür ist keine Code- oder JSON-Änderung nötig.
 
-Die private Öl-Zuordnung liegt in `decryption.json`. Nur Einträge mit `implemented: true` erscheinen in den Umfragen; Platzhalter bleiben unsichtbar und können über die Öl-Auswahl belegt werden.
+`decryption.json` enthält nur noch die verfügbaren Chiffre-Sätze. Aktive Öle und freie Platzhalter sind normale Datenbankeinträge.

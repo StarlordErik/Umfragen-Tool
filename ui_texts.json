@@ -56,7 +56,7 @@
           "oil_guess": {
             "label": "Ist das ein Olivenöl?",
             "yes_value": "Olivenöl",
-            "no_value": "Nicht-Olivenöl"
+            "no_value": "nicht-Olivenöl"
           },
           "overall": {
             "label": "Gesamteindruck",
@@ -85,7 +85,7 @@
           "oil_guess": {
             "label": "Ist das ein Olivenöl?",
             "yes_value": "Olivenöl",
-            "no_value": "Nicht-Olivenöl"
+            "no_value": "nicht-Olivenöl"
           },
           "overall": {
             "label": "Gesamteindruck",
@@ -108,7 +108,7 @@
           "oil_guess": {
             "label": "Ist das ein Olivenöl?",
             "yes_value": "Olivenöl",
-            "no_value": "Nicht-Olivenöl"
+            "no_value": "nicht-Olivenöl"
           },
           "overall": {
             "label": "Gesamteindruck",
@@ -139,6 +139,7 @@
     "updated_prefix": "Aktualisiert:",
     "no_data_updated": "noch keine Daten",
     "tester_count": "Probanden",
+    "oil_count": "Anzahl Öle",
     "response_count": "abgegebene Einzelwertungen",
     "ranking_heading": "Ranglisten",
     "ranking_subtitle": "Alle Daten und Fakten in etlichen Statistiken! Welches Öl hat wo am besten abgeschnitten?",
@@ -173,7 +174,7 @@
       "bitter_title": "Bitterkeit",
       "bitter_subtitle": "bitter = eklig \uD83D\uDE1D",
       "accuracy_title": "Klassifizierungsquote",
-      "accuracy_subtitle": "Ist das Olivenöl? Welches Öl wurde am seltensten richtig erkannt?",
+      "accuracy_subtitle": "Ist das Olivenöl? Welches Öl wurde am häufigsten richtig erkannt?",
       "price_guess_title": "Geschätzter Preis pro Liter",
       "price_guess_subtitle": "Welches Öl schmeckte am teuersten?",
       "price_deviation_title": "Abweichung vom Realpreis",
@@ -182,8 +183,8 @@
   },
   "/einzelne-oel-wertungen": {
     "page_title": "Aufschlüsselung",
-    "heading": "Aufschlüsselung nach Öl",
-    "eyebrow": "detaillierte Ergebnisse je Produkt und Freitextwertungen",
+    "heading": "Aufschlüsselung nach Produkt",
+    "eyebrow": "alle Details und Freitextwertungen je Öl zusammengefasst",
     "loading": "Ergebnisse werden geladen...",
     "login_lead": "Passwort eingeben, um die Ergebnisse zu öffnen.",
     "real_price_unknown": "Realpreis unbekannt",
@@ -193,6 +194,7 @@
     "comments_empty": "Noch keine Kommentare.",
     "no_ranking": "Noch keine Rangliste.",
     "anonymous": "anonym",
+    "owner_label": "Mitgebracht von",
     "categories": {
       "overall": "Gesamtwertung",
       "spread": "Streuung",
@@ -218,21 +220,25 @@
     "space_z_axis": "volle Erfahrung",
     "rankings": {
       "price_accuracy_title": "Schätzmeister",
-      "price_accuracy_subtitle": "Wer konnte die Preise am genausten herausschmecken?",
-      "participant_spread_title": "wie gut gereiftes Öl",
-      "participant_spread_subtitle": "Wer war sich am einigsten mit sich selbst? Wie konstant waren deine Wertungen für ein- und dasselbe Olivenöl über alle Testreihen hinweg?",
+      "price_accuracy_subtitle": "Wer konnte die Preise am genausten herausschmecken? Durchschnittliche Abweichung vom Realpreis:",
+      "participant_spread_title": "Gut gereiftes Öl",
+      "participant_spread_subtitle": "Wie konstant waren deine Wertungen für ein- und dasselbe Olivenöl über alle Testreihen hinweg? Durchschnittliche Wertungsabweichung je Öl:",
       "average_overall_title": "Sonne Kretas",
       "average_overall_subtitle": "Olivenöl-Enthusiasten vs -Skeptiker; durchschnittliche Wertungen:",
-      "classification_title": "Banause",
-      "classification_subtitle": "Wer sollte am ehesten beim Rapsöl bleiben? Klassifizierungsquote:",
+      "classification_title": "Olivenöl-Kenner",
+      "classification_subtitle": "Wer merkt den Unterschied zum Rapsöl am besten? Klassifizierungsquote:",
+      "goat_title": "GOAT-Probanden",
+      "goat_subtitle": "Durchschnittliche Wertung der mitgebrachten Öle:",
+      "neutral_bias_title": "so neutral wie Raps",
+      "neutral_bias_subtitle": "Bereinigte Eigenöl-Abweichung; niedrig ist neutraler:",
+      "comment_count_title": "Tinte für 1,99€/l",
+      "comment_count_subtitle": "Wer hat die meisten Kommentare geschrieben?",
+      "comment_length_title": "Genießer",
+      "comment_length_subtitle": "Wer schrieb die durchschnittlich längsten Kommentare? Durchschnittliche Zeichenlänge:",
+      "crown_score_title": "ölymisches Treppchen",
+      "crown_score_subtitle": "Gold 3 Punkte, Silber 2 Punkte, Bronze 1 Punkt.",
       "bitter_title": "Olivenhexe",
       "bitter_subtitle": "Wessen Geschmack würde einen noch nichtmal vor Gift warnen? durchschnittliche Bitterkeitswertung:"
-    },
-    "clusters": {
-      "preference_title": "3D-Clusteranalyse: Gesamteindruck",
-      "preference_subtitle": "Mittels eines 3D-Mittelwertes aus allen Testreihen und ein wenig Magie lassen sich so Personengruppen mit einem ähnlichen Geschmack clustern!",
-      "cluster_label": "Cluster",
-      "vector_label": "Mittelwert"
     }
   },
   "/oel-auswahl": {
@@ -244,11 +250,22 @@
     "active_suffix": "aktiv",
     "free_suffix": "frei",
     "admin_lead": "Hinzufügen ist nur mit freien Platzhaltern möglich. Entfernen geht nur ohne Wertungen.",
+    "participants_heading": "Probanden",
+    "participants_notice": "Namen aus der Startseite erscheinen automatisch. Die Checkbox zeigt die gewählte Anonymisierung für Kommentare.",
+    "participants_empty": "Noch keine Probanden.",
+    "participant_name_label": "Name",
+    "participant_name_placeholder": "Name hinzufügen",
+    "participant_publish_label": "Name bei Kommentaren veröffentlichen",
+    "participant_add_button": "Proband hinzufügen",
+    "participant_added": "Proband hinzugefügt.",
+    "participant_saved": "Proband gespeichert.",
     "add_heading": "Öl hinzufügen",
     "name_label": "Name",
     "name_placeholder": "Name des Öls",
     "price_label": "Preis pro Liter",
     "price_placeholder": "€ pro Liter",
+    "owner_label": "Mitgebracht von",
+    "owner_empty": "nicht zugeordnet",
     "is_olive_question": "Ist das ein Olivenöl?",
     "yes_label": "Ja",
     "no_label": "Nein",

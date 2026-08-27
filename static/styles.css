@@ -1697,8 +1697,7 @@ a {
   overflow: hidden;
 }
 
-.taste-space-heading,
-.cluster-heading {
+.taste-space-heading {
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -1706,8 +1705,7 @@ a {
   margin-bottom: 12px;
 }
 
-.taste-space-heading h2,
-.cluster-heading h2 {
+.taste-space-heading h2 {
   margin: 0;
 }
 
@@ -1796,80 +1794,39 @@ a {
   font-weight: 850;
 }
 
-.cluster-card {
-  overflow: hidden;
-}
-
-.cluster-table-wrap {
-  max-height: 560px;
-}
-
-.cluster-legend {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 7px;
-}
-
-.cluster-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cluster-color, var(--blue-ranking-color)) 24%, transparent);
-  color: var(--ink);
-  font-size: 0.76rem;
-  font-weight: 820;
-  white-space: nowrap;
-}
-
-.cluster-1 {
-  --cluster-color: #6f9ee8;
-}
-
-.cluster-2 {
-  --cluster-color: #66a36f;
-}
-
-.cluster-3 {
-  --cluster-color: #c3943f;
-}
-
-.cluster-4 {
-  --cluster-color: #c86b7a;
-}
-
-.cluster-row th:first-child {
-  border-left: 4px solid var(--cluster-color, var(--blue-ranking-color));
-}
-
-.cluster-vector {
-  white-space: nowrap;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.cluster-distance {
-  background: rgba(111, 158, 232, var(--distance-alpha, 0.12));
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.cluster-table th,
-.cluster-table td {
-  text-align: center;
-}
-
-.cluster-table th:first-child,
-.cluster-table td:first-child {
-  text-align: left;
-}
-
 .oil-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
   gap: 12px;
+}
+
+.oil-split-view {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.42fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.oil-master-list {
+  position: sticky;
+  top: 14px;
+  max-height: calc(100svh - 28px);
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.oil-detail-pane {
+  min-width: 0;
+}
+
+.oil-master-list .oil-card {
+  box-shadow: none;
+}
+
+.oil-master-list .oil-card.open {
+  border-color: var(--accent-strong);
 }
 
 .oil-card {
@@ -2027,7 +1984,7 @@ a {
 }
 
 .kpi-grid.compact {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .chart-grid {
@@ -2238,6 +2195,8 @@ a {
   }
 
   .participant-form,
+  .participant-add-row,
+  .participant-admin-row,
   .oil-edit-grid {
     grid-template-columns: 1fr;
   }
@@ -2410,8 +2369,7 @@ a {
     font-size: 0.5rem;
   }
 
-  .taste-space-heading,
-  .cluster-heading {
+  .taste-space-heading {
     display: block;
   }
 
@@ -2432,11 +2390,6 @@ a {
 
   .taste-point text {
     font-size: 2.05px;
-  }
-
-  .cluster-legend {
-    justify-content: flex-start;
-    margin-top: 10px;
   }
 
   .ranking-card-body {
@@ -2553,7 +2506,8 @@ a {
 }
 
 .oil-login-panel label:not(.check-option),
-.add-oil-panel label:not(.check-option) {
+.add-oil-panel label:not(.check-option),
+.participant-admin-panel label:not(.check-option) {
   display: block;
   font-weight: 760;
   margin-bottom: 10px;
@@ -2561,7 +2515,8 @@ a {
 
 .oil-login-panel input:not([type="checkbox"]),
 .add-oil-panel input:not([type="checkbox"]),
-.add-oil-panel select {
+.add-oil-panel select,
+.participant-admin-panel input:not([type="checkbox"]) {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -2570,14 +2525,54 @@ a {
 
 .oil-form {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(130px, 0.55fr) minmax(150px, 0.7fr) auto;
+  grid-template-columns: minmax(0, 1.3fr) minmax(120px, 0.48fr) minmax(170px, 0.65fr) minmax(150px, 0.7fr) auto;
   gap: 10px;
   align-items: end;
 }
 
+.participant-admin-panel {
+  margin-bottom: 14px;
+}
+
+.participant-admin-heading h2 {
+  margin: 0;
+}
+
+.participant-add-row,
+.participant-admin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.62fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.participant-admin-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.participant-admin-row {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.participant-publish-option {
+  min-height: 44px;
+  margin: 0;
+}
+
+.participant-rating-count {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .oil-edit-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px;
+  grid-template-columns: minmax(0, 1fr) 130px minmax(170px, 0.6fr);
   gap: 10px;
 }
 
@@ -2587,7 +2582,8 @@ a {
   margin: 0;
 }
 
-.oil-edit-grid input {
+.oil-edit-grid input,
+.oil-edit-grid select {
   width: 100%;
   margin-top: 6px;
   border: 1px solid var(--line);
@@ -2727,6 +2723,10 @@ a {
   line-height: 1;
 }
 
+.oil-card-toggle.static {
+  cursor: default;
+}
+
 .oil-card-body {
   display: none;
   flex-direction: column;
@@ -2827,6 +2827,8 @@ a {
 
 @media (max-width: 860px) {
   .oil-form,
+  .participant-add-row,
+  .participant-admin-row,
   .oil-admin-row {
     grid-template-columns: 1fr;
   }
@@ -2836,6 +2838,8 @@ a {
   }
 
   .oil-admin-actions .ghost-button,
+  .participant-add-row .save-button,
+  .participant-admin-row .ghost-button,
   .action-zone .ghost-button,
   .oil-form .save-button {
     width: 100%;
@@ -2893,7 +2897,8 @@ a {
   .setup-editor textarea,
   .oil-login-panel input:not([type="checkbox"]),
   .add-oil-panel input:not([type="checkbox"]),
-  .add-oil-panel select {
+  .add-oil-panel select,
+  .participant-admin-panel input:not([type="checkbox"]) {
     background: #15181d;
     color: var(--ink);
   }
@@ -2936,7 +2941,8 @@ a {
 .setup-editor textarea,
 .oil-login-panel input:not([type="checkbox"]),
 .add-oil-panel input:not([type="checkbox"]),
-.add-oil-panel select {
+.add-oil-panel select,
+.participant-admin-panel input:not([type="checkbox"]) {
   background: #15181d;
   color: var(--ink);
 }

@@ -11,7 +11,6 @@ const openOils = new Set();
 const openRankings = new Set();
 const expandedRankings = new Set();
 const commentScrollPositions = new Map();
-const tableScrollPositions = new Map();
 const loginScope = mode === "competitive" ? "competitive" : "results";
 const loginContexts = {
   results: {
@@ -101,11 +100,14 @@ const state = {
   payload: null,
   allRankingsExpanded: false,
   competitiveOilIndex: 0,
-  tasteRotation: -35,
+  tasteRotationX: -22,
+  tasteRotationY: -35,
   rotatingTasteSpace: false,
   selectingCompetitiveOil: false,
   rotationStartX: 0,
-  rotationStartAngle: 0,
+  rotationStartY: 0,
+  rotationStartPitch: 0,
+  rotationStartYaw: 0,
   tasteSpaceAnimationFrame: 0,
 };
 
@@ -172,6 +174,12 @@ const signedWholeCurrency = (value) => {
 };
 const realCurrency = (value) => (value === null || value === undefined ? oilText("real_price_unknown", "Realpreis unbekannt") : `${Number(value).toFixed(0)} €/l`);
 const percent = (value) => (value === null || value === undefined ? globalText("open_value", "offen") : `${Math.round(value * 100)}%`);
+const signedNumber = (value) => {
+  if (value === null || value === undefined) return globalText("open_value", "offen");
+  const numeric = Number(value);
+  const sign = numeric >= 0 ? "+" : "-";
+  return `${sign}${Math.abs(numeric).toFixed(2).replace(".", ",")}`;
+};
 const rank = (value) => (value ? `${resultsText("rank_prefix", "Platz")} ${value}` : resultsText("rank_missing", "ohne Rang"));
 const isMobileView = () => window.matchMedia("(max-width: 860px)").matches;
 const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselung je Öl" : mode === "competitive" ? "kompetitive Verkostung" : "Ergebnisse");
@@ -245,7 +253,6 @@ function renderLogin(error = "") {
 
 function render(payload) {
   rememberCommentScroll();
-  rememberTableScroll();
   const { summary } = payload;
 
   app.innerHTML = `
@@ -263,7 +270,8 @@ function render(payload) {
       mode === "rankings"
         ? `<section class="kpi-grid compact">
             ${metricCard(resultsText("tester_count", "Probanden"), summary.tester_count)}
-            ${metricCard(resultsText("response_count", "abgegebene Wertungen"), summary.response_count, `${summary.expected_responses || 0} ${globalText("possible_suffix", "möglich")}`)}
+            ${metricCard(resultsText("oil_count", "Anzahl Öle"), summary.oil_count)}
+            ${metricCard(resultsText("response_count", "abgegebene Wertungen"), summary.response_count)}
           </section>`
         : ""
     }
@@ -271,7 +279,6 @@ function render(payload) {
     ${mode === "oils" ? renderOilSection(payload) : mode === "competitive" ? renderCompetitiveSection(payload) : renderRankingSection(payload)}
   `;
   restoreCommentScroll();
-  restoreTableScroll();
 }
 
 function renderRankingSection(payload) {
@@ -511,6 +518,24 @@ function formatPriceTick(value) {
 
 function renderOilSection(payload) {
   const oils = [...payload.oils].sort((a, b) => a.name.localeCompare(b.name, "de-DE"));
+  if (!isMobileView() && oils.length) {
+    const selectedId = [...openOils].find((id) => oils.some((oil) => oil.id === id));
+    if (!selectedId) {
+      openOils.clear();
+      openOils.add(oils[0].id);
+    }
+    const selectedOil = oils.find((oil) => openOils.has(oil.id)) || oils[0];
+    return `
+      <section class="overview-section oil-split-view">
+        <div class="oil-master-list">
+          ${oils.map((oil) => renderOilCard(oil, payload.config.surveys, payload.rankings, { summaryOnly: true })).join("")}
+        </div>
+        <div class="oil-detail-pane">
+          ${renderOilCard(selectedOil, payload.config.surveys, payload.rankings, { forceOpen: true, staticHeader: true, hideToggleIcon: true })}
+        </div>
+      </section>
+    `;
+  }
   return `
     <section class="overview-section">
       <div class="oil-grid">
@@ -536,7 +561,6 @@ function renderCompetitiveSection(payload) {
         ${(competitive.rankings || []).map((ranking) => renderRankingCard(ranking, `competitive-${ranking.key}`)).join("")}
       </div>
       ${renderTasteSpace(competitive)}
-      ${renderClusterTable(competitive.clusters)}
     </section>
   `;
 }
@@ -555,6 +579,7 @@ function renderTasteSpace(competitive) {
 
   state.competitiveOilIndex = Math.max(0, Math.min(state.competitiveOilIndex, populated.length - 1));
   const oil = populated[state.competitiveOilIndex];
+  const oilLabel = tasteSpaceOilLabel(oil);
   const sliderMax = Math.max(0, populated.length - 1);
   const sliderPos = sliderMax ? (state.competitiveOilIndex / sliderMax) * 100 : 0;
   return `
@@ -562,7 +587,7 @@ function renderTasteSpace(competitive) {
       <div class="taste-space-heading">
         <div>
           <h2>${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}</h2>
-          <p class="metric-sub">${escapeHtml(oil.name)}</p>
+          <p class="metric-sub">${escapeHtml(oilLabel)}</p>
         </div>
         <div class="taste-space-slider range-widget">
           <div class="range-control simple-range-control" style="--range-pos:${escapeHtml(sliderPos.toFixed(2))}%">
@@ -589,6 +614,11 @@ function selectedCompetitiveOil() {
   return populated[state.competitiveOilIndex];
 }
 
+function tasteSpaceOilLabel(oil) {
+  if (!oil?.brought_by_name) return oil?.name || "";
+  return `${oil.name} · ${oilText("owner_label", "Mitgebracht von")}: ${oil.brought_by_name}`;
+}
+
 function scheduleTasteSpaceUpdate() {
   if (state.tasteSpaceAnimationFrame) return;
   state.tasteSpaceAnimationFrame = window.requestAnimationFrame(() => {
@@ -604,7 +634,7 @@ function updateTasteSpace() {
   const card = app.querySelector(".taste-space-card");
   const plot = card?.querySelector(".taste-space-plot");
   const title = card?.querySelector(".taste-space-heading .metric-sub");
-  if (title) title.textContent = oil.name;
+  if (title) title.textContent = tasteSpaceOilLabel(oil);
   if (plot) plot.innerHTML = renderTasteSpaceSvg(oil.points || []);
 
   const slider = card?.querySelector('[data-action="select-competitive-oil"]');
@@ -620,6 +650,13 @@ function renderTasteSpaceSvg(points) {
   const axisX = routeText("space_x_axis", "Geschmack");
   const axisY = routeText("space_y_axis", "Geruch");
   const axisZ = routeText("space_z_axis", "volle Erfahrung");
+  const renderedPoints = points
+    .map((point, index) => ({
+      point,
+      index,
+      projected: project3d(Number(point.x), Number(point.y), Number(point.z)),
+    }))
+    .sort((a, b) => a.projected.depth - b.projected.depth);
   return `
     <svg viewBox="0 0 100 100" role="img" aria-label="${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}">
       <defs>
@@ -631,7 +668,7 @@ function renderTasteSpaceSvg(points) {
       ${render3dAxis("y", axisY)}
       ${render3dAxis("z", axisZ)}
       ${render3dLine([-5, -5, -5], [5, 5, 5], "taste-diagonal")}
-      ${points.map((point, index) => render3dPoint(point, index)).join("")}
+      ${renderedPoints.map(({ point, index, projected }) => render3dPoint(point, index, projected)).join("")}
     </svg>
   `;
 }
@@ -649,12 +686,16 @@ function renderSimpleTicks(min, max, step) {
 }
 
 function project3d(x, y, z) {
-  const angle = (Number(state.tasteRotation) * Math.PI) / 180;
-  const rotatedX = x * Math.cos(angle) - y * Math.sin(angle);
-  const rotatedY = x * Math.sin(angle) + y * Math.cos(angle);
+  const yaw = (Number(state.tasteRotationY) * Math.PI) / 180;
+  const pitch = (Number(state.tasteRotationX) * Math.PI) / 180;
+  const yawX = x * Math.cos(yaw) + z * Math.sin(yaw);
+  const yawZ = -x * Math.sin(yaw) + z * Math.cos(yaw);
+  const pitchedY = y * Math.cos(pitch) - yawZ * Math.sin(pitch);
+  const pitchedZ = y * Math.sin(pitch) + yawZ * Math.cos(pitch);
   return {
-    x: 50 + rotatedX * 6.1,
-    y: 56 + rotatedY * 3.0 - z * 5.6,
+    x: 50 + yawX * 6.2,
+    y: 54 - pitchedY * 5.4,
+    depth: pitchedZ,
   };
 }
 
@@ -686,81 +727,17 @@ function render3dLabel(position, label, anchor = "middle", className = "taste-ax
   return `<text class="${escapeHtml(className)}" x="${escapeHtml(point.x.toFixed(2))}" y="${escapeHtml(point.y.toFixed(2))}" text-anchor="${escapeHtml(anchor)}">${escapeHtml(label)}</text>`;
 }
 
-function render3dPoint(point, index) {
-  const projected = project3d(Number(point.x), Number(point.y), Number(point.z));
+function render3dPoint(point, index, projected = project3d(Number(point.x), Number(point.y), Number(point.z))) {
   const labelLeft = projected.x > 70;
   const title = `${point.name}: ${routeText("space_x_axis", "Geschmack")} ${number(point.x)}, ${routeText("space_y_axis", "Geruch")} ${number(point.y)}, ${routeText("space_z_axis", "volle Erfahrung")} ${number(point.z)}`;
+  const radius = 1.45 + ((projected.depth + 8.66) / 17.32) * 0.45;
   return `
     <g class="taste-point ${labelLeft ? "label-left" : ""}" transform="translate(${escapeHtml(projected.x.toFixed(2))} ${escapeHtml(projected.y.toFixed(2))})">
       <title>${escapeHtml(title)}</title>
-      <circle r="1.65" fill="${escapeHtml(pointColor(index))}"></circle>
+      <circle r="${escapeHtml(Math.max(1.25, Math.min(2.05, radius)).toFixed(2))}" fill="${escapeHtml(pointColor(index))}"></circle>
       <text x="${labelLeft ? "-2.9" : "2.9"}" y="0.85" text-anchor="${labelLeft ? "end" : "start"}">${escapeHtml(point.name)}</text>
     </g>
   `;
-}
-
-function renderClusterTable(cluster) {
-  const items = cluster?.items || [];
-  if (!items.length) return "";
-  const labels = dict(["/kompetitive-verkostung", "clusters"]);
-  const maxDistance = Number(cluster.max_distance) || 1;
-  return `
-    <article class="metric-card cluster-card">
-      <div class="cluster-heading">
-        <div>
-          <h2>${escapeHtml(cluster.title)}</h2>
-          <p class="metric-sub">${escapeHtml(cluster.subtitle || "")}</p>
-        </div>
-        <div class="cluster-legend">
-          ${uniqueClusters(items).map((clusterId) => `<span class="cluster-badge cluster-${escapeHtml(clusterId)}">${escapeHtml(`${labels.cluster_label || "Cluster"} ${clusterId}`)}</span>`).join("")}
-        </div>
-      </div>
-      <div class="data-table-wrap cluster-table-wrap" data-scroll-key="${escapeHtml(slugify(cluster.title))}">
-        <table class="data-table cluster-table">
-          <thead>
-            <tr>
-              <th>Proband</th>
-              <th>${escapeHtml(labels.cluster_label || "Cluster")}</th>
-              <th>${escapeHtml(labels.vector_label || "Vektor")}</th>
-              ${items.map((item) => `<th>${escapeHtml(item.name)}</th>`).join("")}
-            </tr>
-          </thead>
-          <tbody>
-            ${items.map((item) => renderClusterRow(item, items, maxDistance, labels)).join("")}
-          </tbody>
-        </table>
-      </div>
-    </article>
-  `;
-}
-
-function renderClusterRow(item, items, maxDistance, labels) {
-  const distances = new Map((item.distances || []).map((distance) => [distance.participant_id, distance.value]));
-  return `
-    <tr class="cluster-row cluster-${escapeHtml(item.cluster)}">
-      <th>${escapeHtml(item.name)}</th>
-      <td><span class="cluster-badge cluster-${escapeHtml(item.cluster)}">${escapeHtml(`${labels.cluster_label || "Cluster"} ${item.cluster}`)}</span></td>
-      <td class="cluster-vector">${escapeHtml(formatVector(item.vector))}</td>
-      ${items.map((other) => renderClusterDistanceCell(distances.get(other.participant_id), maxDistance)).join("")}
-    </tr>
-  `;
-}
-
-function renderClusterDistanceCell(value, maxDistance) {
-  if (value === null || value === undefined) return `<td></td>`;
-  const numeric = Number(value);
-  const closeness = maxDistance <= 0 ? 1 : 1 - Math.min(1, numeric / maxDistance);
-  const alpha = 0.08 + closeness * 0.34;
-  return `<td class="cluster-distance" style="--distance-alpha:${escapeHtml(alpha.toFixed(3))}">${escapeHtml(number(numeric))}</td>`;
-}
-
-function uniqueClusters(items) {
-  return [...new Set(items.map((item) => item.cluster))].sort((a, b) => a - b);
-}
-
-function formatVector(vector) {
-  const values = (vector || []).map((value) => number(value));
-  return values.length === 1 ? values[0] : `(${values.join("; ")})`;
 }
 
 function metricCard(label, value, sub = "") {
@@ -803,7 +780,7 @@ function renderRankingItem(item, ranking, currentOilId, index, total, domain, sh
   const itemId = item.oil_id || item.participant_id || item.id;
   const current = itemId === currentOilId ? " current" : "";
   const rankRatio = total <= 1 ? 0 : index / (total - 1);
-  const color = rankingColor(ranking, rankRatio, variant);
+  const color = rankingColor(ranking, rankRatio, variant, item.value);
   const graph = showBoxPlot ? renderRankingGraph(item, ranking, domain) : "";
   return `
     <li class="${current}${graph ? " has-graph" : ""}" style="--rank-bg:${escapeHtml(color)}">
@@ -855,9 +832,11 @@ function renderBoxPlot(box, domain, unit) {
 
 function renderBoxPlotScale(domain, unit = "") {
   const ticks = [];
-  for (let index = 0; index <= 4; index += 1) {
-    const value = domain.min + ((domain.max - domain.min) * index) / 4;
-    const edge = index === 0 ? " first" : index === 4 ? " last" : "";
+  const step = Number(domain.step) || (domain.max - domain.min <= 10 ? 1 : 5);
+  const tickCount = Math.round((domain.max - domain.min) / step);
+  for (let index = 0; index <= tickCount; index += 1) {
+    const value = index === tickCount ? domain.max : domain.min + step * index;
+    const edge = index === 0 ? " first" : index === tickCount ? " last" : "";
     const label = edge ? `<em>${escapeHtml(formatScaleLabel(value, unit))}</em>` : "";
     ticks.push(`<span class="${edge}" style="left:${escapeHtml(position(value, domain))}%">${label}</span>`);
   }
@@ -868,6 +847,7 @@ function formatScaleLabel(value, unit) {
   const rounded = Math.round(Number(value));
   if (unit === "%") return `${Math.round(Number(value) * 100)}%`;
   if (unit === "€" || unit === "€±") return `${rounded} €`;
+  if (unit === "Punkte±") return signedNumber(value);
   return String(rounded);
 }
 
@@ -898,19 +878,25 @@ function renderPriceDeviationPlot(item, domain) {
   `;
 }
 
-function renderOilCard(oil, surveys, rankings) {
-  const open = openOils.has(oil.id);
+function renderOilCard(oil, surveys, rankings, options = {}) {
+  const open = Boolean(options.forceOpen) || openOils.has(oil.id);
+  const toggleContent = `
+        <h3>${escapeHtml(oil.name)}</h3>
+        ${options.hideToggleIcon ? "" : `<span>${open ? "-" : "+"}</span>`}
+      `;
   return `
     <article class="oil-card ${open ? "open" : ""}" data-oil-id="${escapeHtml(oil.id)}">
-      <button class="oil-card-toggle" type="button" data-action="toggle-oil" data-oil-id="${escapeHtml(oil.id)}">
-        <h3>${escapeHtml(oil.name)}</h3>
-        <span>${open ? "-" : "+"}</span>
-      </button>
+      ${
+        options.staticHeader
+          ? `<div class="oil-card-toggle static">${toggleContent}</div>`
+          : `<button class="oil-card-toggle" type="button" data-action="toggle-oil" data-oil-id="${escapeHtml(oil.id)}">${toggleContent}</button>`
+      }
 
-      <div class="oil-card-body">
+      ${options.summaryOnly ? "" : `<div class="oil-card-body">
         <div class="oil-meta-row">
           <span>${escapeHtml(oil.type || "Öl")}</span>
           <span>${escapeHtml(realCurrency(oil.actual_price_per_liter_eur))}</span>
+          ${oil.brought_by_name ? `<span>${escapeHtml(oilText("owner_label", "Mitgebracht von"))}: ${escapeHtml(oil.brought_by_name)}</span>` : ""}
           <span>${escapeHtml(oil.response_count)} ${escapeHtml(oilText("ratings_suffix", "Wertungen"))}</span>
         </div>
 
@@ -933,7 +919,7 @@ function renderOilCard(oil, surveys, rankings) {
             ${oil.comments.length ? oil.comments.map(renderComment).join("") : `<p class="notice">${escapeHtml(oilText("comments_empty", "Noch keine Kommentare."))}</p>`}
           </div>
         </div>
-      </div>
+      </div>`}
     </article>
   `;
 }
@@ -987,7 +973,7 @@ function rankMarkup(rankValue, ranking) {
 
 function rankingUsesCrowns(ranking) {
   if (ranking?.crowns === false) return false;
-  return !["guess_accuracy", "spread", "own_spread"].includes(ranking?.key || "");
+  return !["spread", "own_spread"].includes(ranking?.key || "");
 }
 
 function renderMiniRanking(ranking, id, currentOilId) {
@@ -1032,6 +1018,8 @@ function displayCipher(cipher, survey = {}) {
 
 function formatByUnit(value, unit) {
   if (unit === "%") return percent(value);
+  if (unit === "Punkte±") return signedNumber(value);
+  if (["Kommentare", "Zeichen", "Kronenpunkte"].includes(unit)) return value === null || value === undefined ? globalText("open_value", "offen") : String(Math.round(Number(value)));
   if (unit === "%±") return signedPercentPoints(value);
   if (unit === "€±") return signedCurrency(value);
   if (unit === "€") return currency(value);
@@ -1047,7 +1035,7 @@ function signedPercentPoints(value) {
 
 function rankingDomain(items, ranking) {
   if (ranking?.key === "overall_all" || String(ranking?.key || "").startsWith("overall_")) {
-    return { min: -5, max: 5 };
+    return { min: -5, max: 5, step: 1 };
   }
   return boxDomain(items);
 }
@@ -1055,10 +1043,16 @@ function rankingDomain(items, ranking) {
 function boxDomain(items) {
   const values = items.flatMap((item) => (item.box ? [item.box.min, item.box.max] : []));
   if (!values.length) return null;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  if (min === max) return { min: min - 1, max: max + 1 };
-  return { min, max };
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const step = rawMax - rawMin <= 10 ? 1 : 5;
+  let min = Math.floor(rawMin / step) * step;
+  let max = Math.ceil(rawMax / step) * step;
+  if (min === max) {
+    min -= step;
+    max += step;
+  }
+  return { min, max, step };
 }
 
 function position(value, domain) {
@@ -1071,10 +1065,12 @@ function rankingColorAccent(ranking, variant = "mini") {
   return "var(--neutral-ranking-color)";
 }
 
-function rankingColor(ranking, rankRatio, variant = "mini") {
+function rankingColor(ranking, rankRatio, variant = "mini", value = null) {
   if (["price_guess", "participant_average_overall", "participant_bitter"].includes(ranking.key) || (variant === "card" && ["spread", "own_spread"].includes(ranking.key))) return priceGradientColor(rankRatio);
-  const ratio = ["guess_accuracy", "participant_classification"].includes(ranking.key) ? 1 - rankRatio : rankRatio;
-  return gradientColor(ratio);
+  if (["guess_accuracy", "participant_classification"].includes(ranking.key) && value !== null && value !== undefined) {
+    return gradientColor(1 - Math.max(0, Math.min(1, Number(value))));
+  }
+  return gradientColor(rankRatio);
 }
 
 function gradientColor(ratio) {
@@ -1099,21 +1095,6 @@ function restoreCommentScroll() {
   for (const node of app.querySelectorAll(".comment-scroll[data-scroll-key]")) {
     const top = commentScrollPositions.get(node.dataset.scrollKey);
     if (top !== undefined) node.scrollTop = top;
-  }
-}
-
-function rememberTableScroll() {
-  for (const node of app.querySelectorAll(".cluster-table-wrap[data-scroll-key]")) {
-    tableScrollPositions.set(node.dataset.scrollKey, { left: node.scrollLeft, top: node.scrollTop });
-  }
-}
-
-function restoreTableScroll() {
-  for (const node of app.querySelectorAll(".cluster-table-wrap[data-scroll-key]")) {
-    const position = tableScrollPositions.get(node.dataset.scrollKey);
-    if (!position) continue;
-    node.scrollLeft = position.left;
-    node.scrollTop = position.top;
   }
 }
 
@@ -1167,8 +1148,12 @@ function handleClick(event) {
   const oilToggle = event.target.closest('[data-action="toggle-oil"]');
   if (oilToggle) {
     const id = oilToggle.dataset.oilId;
-    if (openOils.has(id)) openOils.delete(id);
-    else {
+    if (!isMobileView()) {
+      openOils.clear();
+      openOils.add(id);
+    } else if (openOils.has(id)) {
+      openOils.delete(id);
+    } else {
       openOils.clear();
       openOils.add(id);
     }
@@ -1214,13 +1199,16 @@ app.addEventListener("pointerdown", (event) => {
   if (!plot) return;
   state.rotatingTasteSpace = true;
   state.rotationStartX = event.clientX;
-  state.rotationStartAngle = state.tasteRotation;
+  state.rotationStartY = event.clientY;
+  state.rotationStartPitch = state.tasteRotationX;
+  state.rotationStartYaw = state.tasteRotationY;
   plot.setPointerCapture?.(event.pointerId);
 });
 
 document.addEventListener("pointermove", (event) => {
   if (!state.rotatingTasteSpace) return;
-  state.tasteRotation = state.rotationStartAngle + (event.clientX - state.rotationStartX) * 0.7;
+  state.tasteRotationY = state.rotationStartYaw + (event.clientX - state.rotationStartX) * 0.7;
+  state.tasteRotationX = Math.max(-85, Math.min(85, state.rotationStartPitch - (event.clientY - state.rotationStartY) * 0.55));
   scheduleTasteSpaceUpdate();
 });
 
