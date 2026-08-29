@@ -133,18 +133,21 @@ function render() {
   for (const input of app.querySelectorAll('input[type="range"][data-field]')) {
     setRangeVisual(input);
   }
+  if (state.config.event_finished) {
+    for (const input of app.querySelectorAll(".sample-detail-slot input, .sample-detail-slot select, .sample-detail-slot textarea, .no-comment-button")) {
+      input.disabled = true;
+    }
+  }
   updateProgress();
 }
 
 function renderSampleTab(sample) {
   const complete = isComplete(sample.cipher);
-  const showTitle = state.survey.cipher_set === "greek";
   const open = state.openCipher === sample.cipher;
   return `
     <article class="sample-card sample-tab ${open ? "open" : ""} ${complete ? "complete" : ""}" data-cipher="${escapeHtml(sample.cipher)}">
-      <button class="sample-header ${showTitle ? "" : "badge-only"}" type="button" data-action="toggle" data-cipher="${escapeHtml(sample.cipher)}">
+      <button class="sample-header badge-only" type="button" data-action="toggle" data-cipher="${escapeHtml(sample.cipher)}">
         <span class="cipher-badge">${escapeHtml(cipherBadge(sample.cipher))}</span>
-        ${showTitle ? `<span class="sample-title"><h2>${escapeHtml(cipherBadge(sample.cipher))}</h2></span>` : ""}
         <span class="status-pill" data-status="${escapeHtml(sample.cipher)}">${complete ? escapeHtml(surveyText("complete", "fertig")) : escapeHtml(surveyText("incomplete", "offen"))}</span>
       </button>
     </article>
@@ -153,9 +156,16 @@ function renderSampleTab(sample) {
 
 function renderSampleDetail(sample) {
   if (!sample) return "";
+  const writtenCipher = writtenCipherLabel(sample.cipher);
+  const sampleHeading = state.config.event_finished && sample.oil_name
+    ? `<div class="finished-sample-heading">${writtenCipher ? `<span>${escapeHtml(writtenCipher)}</span>` : ""}<h2>${escapeHtml(sample.oil_name)}</h2></div>`
+    : writtenCipher
+      ? `<div class="finished-sample-heading active-cipher-heading"><h2>${escapeHtml(writtenCipher)}</h2></div>`
+      : "";
   return `
     <article class="sample-card sample-detail-card open ${isComplete(sample.cipher) ? "complete" : ""}" data-cipher="${escapeHtml(sample.cipher)}">
       <div class="sample-body">
+        ${sampleHeading}
         <div class="field-grid">
           ${state.survey.fields.map((field) => renderField(sample.cipher, field)).join("")}
         </div>
@@ -172,6 +182,9 @@ function renderOpenSampleDetail() {
   slot.innerHTML = sample ? renderSampleDetail(sample) : "";
   for (const input of slot.querySelectorAll('input[type="range"][data-field]')) {
     setRangeVisual(input);
+  }
+  if (state.config.event_finished) {
+    for (const input of slot.querySelectorAll("input, select, textarea, .no-comment-button")) input.disabled = true;
   }
 }
 
@@ -191,6 +204,20 @@ function participantSheetLabel() {
 function cipherBadge(cipher) {
   if (state.survey.cipher_set === "greek") return greekSymbols[cipher] || cipher;
   return cipher;
+}
+
+function writtenCipherLabel(cipher) {
+  return state.survey.cipher_set === "greek" ? String(cipher || "") : "";
+}
+
+function yesNoValueMatches(currentValue, configuredValue, positive) {
+  if (currentValue === configuredValue) return true;
+  if (typeof currentValue === "boolean") return currentValue === positive;
+  const normalized = String(currentValue ?? "").trim().toLocaleLowerCase("de-DE");
+  const aliases = positive
+    ? new Set(["ja", "yes", "true", "1", "olivenöl", "olivenoel"])
+    : new Set(["nein", "no", "false", "0", "nicht-olivenöl", "nicht olivenöl", "nicht-olivenoel", "nicht olivenoel"]);
+  return aliases.has(normalized);
 }
 
 function renderField(cipher, field) {
@@ -224,8 +251,8 @@ function renderField(cipher, field) {
           <legend class="visually-hidden">${escapeHtml(field.label)}</legend>
           <div class="inline-choice-question" aria-hidden="true">${legendContent}</div>
           <div class="choice-row">
-            ${renderCheckOption(cipher, field.id, yesValue, surveyText("yes_label", "Ja"), value === yesValue)}
-            ${renderCheckOption(cipher, field.id, noValue, surveyText("no_label", "Nein"), value === noValue)}
+            ${renderCheckOption(cipher, field.id, yesValue, surveyText("yes_label", "Ja"), yesNoValueMatches(value, yesValue, true))}
+            ${renderCheckOption(cipher, field.id, noValue, surveyText("no_label", "Nein"), yesNoValueMatches(value, noValue, false))}
           </div>
         </fieldset>
       `;
@@ -234,8 +261,8 @@ function renderField(cipher, field) {
       <fieldset class="field choice-field">
         <legend>${legendContent}</legend>
         <div class="choice-row">
-          ${renderCheckOption(cipher, field.id, yesValue, surveyText("yes_label", "Ja"), value === yesValue)}
-          ${renderCheckOption(cipher, field.id, noValue, surveyText("no_label", "Nein"), value === noValue)}
+          ${renderCheckOption(cipher, field.id, yesValue, surveyText("yes_label", "Ja"), yesNoValueMatches(value, yesValue, true))}
+          ${renderCheckOption(cipher, field.id, noValue, surveyText("no_label", "Nein"), yesNoValueMatches(value, noValue, false))}
         </div>
       </fieldset>
     `;
@@ -377,6 +404,7 @@ function handleClick(event) {
 }
 
 function handleInput(event) {
+  if (state.config?.event_finished) return;
   const target = event.target;
   if (!target?.dataset?.field || !target.dataset.cipher) return;
   updateAnswerFromInput(target);
@@ -448,6 +476,7 @@ function scheduleSave(cipher) {
 }
 
 async function saveCipher(cipher) {
+  if (state.config?.event_finished) return;
   const card = cardFor(cipher);
   if (state.saving.has(cipher)) return;
   state.dirty.delete(cipher);
@@ -523,7 +552,7 @@ function updateProgress() {
   if (fill) fill.style.width = `${ratio}%`;
   if (value) value.textContent = `${done}/${total}`;
   if (link) {
-    const locked = done < total;
+    const locked = !state.config?.event_finished && done < total;
     link.classList.toggle("locked-link", locked);
     link.setAttribute("aria-disabled", locked ? "true" : "false");
   }

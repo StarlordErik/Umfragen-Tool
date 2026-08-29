@@ -10,6 +10,8 @@ import random
 import re
 import socket
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import uuid
 import webbrowser
@@ -32,6 +34,8 @@ STATIC_DIR = ROOT / "static"
 COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
 UPDATE_LOCK = threading.RLock()
+EXPORT_LOCK = threading.RLock()
+EXPORT_PAGES: dict[str, str] = {}
 DEFAULT_OIL_SLOT_COUNT = 24
 OIL_SELECTION_PASSWORD = "Erik"
 RESULTS_PASSWORD = "lol"
@@ -149,7 +153,32 @@ class Respondent:
     user_agent: str
     display_name: str | None
     publish_name: bool
+    publish_competitive_name: bool
+    is_participant: bool
     is_new_cookie: bool
+
+
+def event_is_finished(db: sqlite3.Connection | None = None) -> bool:
+    own_connection = db is None
+    connection = db or connect_db()
+    try:
+        row = connection.execute("SELECT value FROM event_settings WHERE key = 'finished'").fetchone()
+        return bool(row and str(row["value"]) == "1")
+    finally:
+        if own_connection:
+            connection.close()
+
+
+def set_event_finished(finished: bool) -> None:
+    with UPDATE_LOCK, connect_db() as db:
+        db.execute(
+            """
+            INSERT INTO event_settings (key, value, updated_at)
+            VALUES ('finished', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            ("1" if finished else "0", now_iso()),
+        )
 
 
 def now_iso() -> str:
@@ -394,8 +423,12 @@ def survey_by_id(config: dict[str, Any], survey_id: str) -> dict[str, Any] | Non
 def survey_samples(config: dict[str, Any], decryption: dict[str, Any], survey: dict[str, Any]) -> list[dict[str, str]]:
     order = decryption["cipher_sets"][survey["cipher_set"]]
     order_index = {cipher: index for index, cipher in enumerate(order)}
+    finished = event_is_finished()
     samples = [
-        {"cipher": oil["ciphers"][survey["id"]]}
+        {
+            "cipher": oil["ciphers"][survey["id"]],
+            **({"oil_name": str(oil.get("name") or "")} if finished else {}),
+        }
         for oil in active_oils(decryption)
         if oil.get("ciphers", {}).get(survey["id"])
     ]
@@ -432,6 +465,7 @@ def public_runtime_config(config: dict[str, Any], decryption: dict[str, Any]) ->
         surveys.append(item)
     return {
         "event": config.get("event", {}),
+        "event_finished": event_is_finished(),
         "oil_type_options": config.get("oil_type_options", []),
         "surveys": surveys,
     }
@@ -488,6 +522,8 @@ def participant_admin_rows(db: sqlite3.Connection | None = None) -> list[dict[st
                 r.id,
                 r.display_name,
                 r.publish_name,
+                r.publish_competitive_name,
+                r.is_participant,
                 COUNT(sr.survey_id) AS response_count
             FROM respondents r
             LEFT JOIN survey_responses sr ON sr.respondent_id = r.id
@@ -501,6 +537,8 @@ def participant_admin_rows(db: sqlite3.Connection | None = None) -> list[dict[st
                 "id": int(row["id"]),
                 "display_name": str(row["display_name"] or ""),
                 "publish_name": bool(row["publish_name"]),
+                "publish_competitive_name": bool(row["publish_competitive_name"]),
+                "is_participant": bool(row["is_participant"]),
                 "response_count": int(row["response_count"] or 0),
             }
             for row in rows
@@ -562,6 +600,7 @@ def oil_selection_payload(config: dict[str, Any], decryption: dict[str, Any]) ->
         "placeholder_count": sum(1 for oil in oils if not oil["implemented"]),
         "oil_type_options": config.get("oil_type_options", []),
         "participants": participants,
+        "event_finished": event_is_finished(),
     }
 
 
@@ -698,6 +737,8 @@ def update_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict
     oil_id = str(payload.get("oil_id", ""))
     name = str(payload.get("name", "")).strip()
     price = required_price(payload.get("actual_price_per_liter_eur"))
+    is_olive_oil = bool(payload.get("is_olive_oil"))
+    oil_type = "Olivenöl" if is_olive_oil else "Nicht-Olivenöl"
     if not name:
         raise ValueError("Ölname fehlt.")
     oil = next((item for item in decryption["oils"] if item.get("id") == oil_id and item.get("implemented")), None)
@@ -709,12 +750,14 @@ def update_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict
         db.execute(
             """
             UPDATE oils
-            SET name = ?, actual_price_per_liter_eur = ?, price_source = ?,
+            SET name = ?, type = ?, is_olive_oil = ?, actual_price_per_liter_eur = ?, price_source = ?,
                 brought_by_respondent_id = ?, updated_at = ?
             WHERE slot_index = ? AND implemented = 1
             """,
             (
                 name[:160],
+                oil_type,
+                1 if is_olive_oil else 0,
                 price,
                 "Öl-Auswahl",
                 owner_id,
@@ -949,6 +992,8 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
             user_agent TEXT NOT NULL,
             display_name TEXT,
             publish_name INTEGER NOT NULL DEFAULT 1,
+            publish_competitive_name INTEGER NOT NULL DEFAULT 1,
+            is_participant INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -989,6 +1034,12 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
             FOREIGN KEY (slot_index) REFERENCES oils(slot_index) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS event_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_respondents_ip_agent
             ON respondents(ip, user_agent, updated_at);
 
@@ -1005,6 +1056,10 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
     respondent_columns = {row["name"] for row in db.execute("PRAGMA table_info(respondents)").fetchall()}
     if "publish_name" not in respondent_columns:
         db.execute("ALTER TABLE respondents ADD COLUMN publish_name INTEGER NOT NULL DEFAULT 1")
+    if "publish_competitive_name" not in respondent_columns:
+        db.execute("ALTER TABLE respondents ADD COLUMN publish_competitive_name INTEGER NOT NULL DEFAULT 1")
+    if "is_participant" not in respondent_columns:
+        db.execute("ALTER TABLE respondents ADD COLUMN is_participant INTEGER NOT NULL DEFAULT 1")
 
     oil_columns = {row["name"] for row in db.execute("PRAGMA table_info(oils)").fetchall()}
     if "brought_by_respondent_id" not in oil_columns:
@@ -1148,6 +1203,8 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
         user_agent=str(row["user_agent"]),
         display_name=str(row["display_name"]) if row["display_name"] else None,
         publish_name=bool(row["publish_name"]) if "publish_name" in row.keys() else True,
+        publish_competitive_name=bool(row["publish_competitive_name"]) if "publish_competitive_name" in row.keys() else True,
+        is_participant=bool(row["is_participant"]) if "is_participant" in row.keys() else True,
         is_new_cookie=is_new_cookie,
     )
 
@@ -1158,7 +1215,10 @@ def participant_payload(respondent: Respondent) -> dict[str, Any]:
         "participant": {
             "display_name": respondent.display_name or "",
             "publish_name": respondent.publish_name if respondent.display_name else True,
+            "publish_competitive_name": respondent.publish_competitive_name if respondent.display_name else True,
+            "is_participant": respondent.is_participant,
         },
+        "event_finished": event_is_finished(),
     }
 
 
@@ -1170,6 +1230,7 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
     respondent = get_or_create_respondent(handler)
     display_name = clean_display_name(payload.get("display_name"))
     publish_name = bool(payload.get("publish_name"))
+    publish_competitive_name = bool(payload.get("publish_competitive_name"))
     timestamp = now_iso()
 
     with UPDATE_LOCK, connect_db() as db:
@@ -1187,6 +1248,12 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
 
         target_id = int(target["id"]) if target else respondent.id
         target_token = respondent.token
+        existing_preferences = target or db.execute("SELECT * FROM respondents WHERE id = ?", (target_id,)).fetchone()
+        if event_is_finished(db) and existing_preferences is not None:
+            if bool(existing_preferences["publish_name"]) and not publish_name:
+                raise ValueError("Nach Ende der Umfrage kann der Name bei den Freitextbewertungen nicht mehr anonymisiert werden.")
+            if bool(existing_preferences["publish_competitive_name"]) and not publish_competitive_name:
+                raise ValueError("Nach Ende der Umfrage kann die Teilnahme am Symposium-Minispiel nicht mehr zurückgenommen werden.")
 
         if target and target_id != respondent.id:
             current_rows = db.execute(
@@ -1231,7 +1298,8 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
         db.execute(
             """
             UPDATE respondents
-            SET token = ?, ip = ?, user_agent = ?, display_name = ?, publish_name = ?, updated_at = ?
+            SET token = ?, ip = ?, user_agent = ?, display_name = ?, publish_name = ?,
+                publish_competitive_name = ?, is_participant = 1, updated_at = ?
             WHERE id = ?
             """,
             (
@@ -1240,6 +1308,7 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
                 respondent.user_agent,
                 display_name or None,
                 1 if publish_name else 0,
+                1 if publish_competitive_name else 0,
                 timestamp,
                 target_id,
             ),
@@ -1253,6 +1322,8 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
         user_agent=str(row["user_agent"]),
         display_name=str(row["display_name"]) if row["display_name"] else None,
         publish_name=bool(row["publish_name"]),
+        publish_competitive_name=bool(row["publish_competitive_name"]),
+        is_participant=True,
         is_new_cookie=False,
     )
     return participant_payload(updated), {"Set-Cookie": cookie_header(updated.token)}
@@ -1282,13 +1353,18 @@ def add_participant_from_admin(config: dict[str, Any], decryption: dict[str, Any
     if not display_name:
         raise ValueError("Name fehlt.")
     publish_name = bool(payload.get("publish_name", True))
+    publish_competitive_name = bool(payload.get("publish_competitive_name", True))
+    is_participant = bool(payload.get("is_participant", False))
     timestamp = now_iso()
     with UPDATE_LOCK, connect_db() as db:
         ensure_unique_participant_name(db, display_name)
         db.execute(
             """
-            INSERT INTO respondents (token, ip, user_agent, display_name, publish_name, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO respondents (
+                token, ip, user_agent, display_name, publish_name, publish_competitive_name,
+                is_participant, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 f"manual-{uuid.uuid4().hex}",
@@ -1296,6 +1372,8 @@ def add_participant_from_admin(config: dict[str, Any], decryption: dict[str, Any
                 "Admin-Probandenliste",
                 display_name,
                 1 if publish_name else 0,
+                1 if publish_competitive_name else 0,
+                1 if is_participant else 0,
                 timestamp,
                 timestamp,
             ),
@@ -1311,19 +1389,45 @@ def update_participant_from_admin(config: dict[str, Any], decryption: dict[str, 
     if not display_name:
         raise ValueError("Name fehlt.")
     publish_name = bool(payload.get("publish_name"))
+    publish_competitive_name = bool(payload.get("publish_competitive_name"))
+    is_participant = bool(payload.get("is_participant"))
     with UPDATE_LOCK, connect_db() as db:
-        row = db.execute("SELECT id FROM respondents WHERE id = ?", (participant_id,)).fetchone()
+        row = db.execute("SELECT * FROM respondents WHERE id = ?", (participant_id,)).fetchone()
         if row is None:
             raise ValueError("Proband nicht gefunden.")
+        if event_is_finished(db):
+            if bool(row["publish_name"]) and not publish_name:
+                raise ValueError("Nach Ende der Umfrage kann der Name bei den Freitextbewertungen nicht mehr anonymisiert werden.")
+            if bool(row["publish_competitive_name"]) and not publish_competitive_name:
+                raise ValueError("Nach Ende der Umfrage kann die Teilnahme am Symposium-Minispiel nicht mehr zurückgenommen werden.")
         ensure_unique_participant_name(db, display_name, participant_id)
         db.execute(
             """
             UPDATE respondents
-            SET display_name = ?, publish_name = ?, updated_at = ?
+            SET display_name = ?, publish_name = ?, publish_competitive_name = ?, is_participant = ?, updated_at = ?
             WHERE id = ?
             """,
-            (display_name, 1 if publish_name else 0, now_iso(), participant_id),
+            (
+                display_name,
+                1 if publish_name else 0,
+                1 if publish_competitive_name else 0,
+                1 if is_participant else 0,
+                now_iso(),
+                participant_id,
+            ),
         )
+    return oil_selection_payload(config, load_decryption(config))
+
+
+def delete_participant_from_admin(config: dict[str, Any], decryption: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    participant_id = as_int(payload.get("participant_id"))
+    if participant_id is None:
+        raise ValueError("Proband fehlt.")
+    with UPDATE_LOCK, connect_db() as db:
+        row = db.execute("SELECT id FROM respondents WHERE id = ?", (participant_id,)).fetchone()
+        if row is None:
+            raise ValueError("Proband nicht gefunden.")
+        db.execute("DELETE FROM respondents WHERE id = ?", (participant_id,))
     return oil_selection_payload(config, load_decryption(config))
 
 
@@ -1464,6 +1568,7 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
     texts = load_texts()
     can_open_surveys = bool(respondent.display_name)
     publish_checked = respondent.publish_name if respondent.display_name else True
+    publish_competitive_checked = respondent.publish_competitive_name if respondent.display_name else True
     survey_cards = []
     for survey in public_runtime_config(config, decryption)["surveys"]:
         href = f"/umfrage/{survey['id']}"
@@ -1484,6 +1589,26 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
     page_title = route_text(texts, "/", "page_title", "Studie des Oliven-Symposiums")
     home_subtitle = route_text(texts, "/", "subtitle", "")
     home_subtitle_html = f'<p class="topbar-subtitle">{html.escape(home_subtitle)}</p>' if home_subtitle else ""
+    finished = event_is_finished()
+    export_oil_options = "".join(
+        f'<label class="check-option"><input type="checkbox" name="oil" value="{html.escape(str(oil["id"]))}" {"checked" if str(oil.get("brought_by_respondent_id") or "") == str(respondent.id) else ""}><span>{html.escape(str(oil.get("name") or ""))}</span></label>'
+        for oil in active_oils(decryption)
+    )
+    export_panel = (
+        f"""
+        <details class="export-panel">
+          <summary><span>{html.escape(route_text(texts, '/', 'export_title', 'Eigene Ergebnisse als PDF exportieren'))}</span><b class="details-indicator" aria-hidden="true"></b></summary>
+          <form action="/ergebnisse-export.pdf" method="get">
+            <label class="check-option"><input id="export-competitive" type="checkbox" name="competitive" value="1" {"checked" if publish_competitive_checked else ""}><span>{html.escape(route_text(texts, '/', 'export_competitive_label', 'Symposium-Minispiel'))}</span></label>
+            <p class="notice">{html.escape(route_text(texts, '/', 'export_notice', 'Wähle Detailseiten und optional das Symposium-Minispiel aus.'))}</p>
+            <div class="export-oil-options">{export_oil_options}</div>
+            <button class="save-button" type="submit" {'disabled' if not respondent.display_name else ''}>{html.escape(route_text(texts, '/', 'export_button', 'PDF exportieren'))}</button>
+          </form>
+        </details>
+        """
+        if finished
+        else ""
+    )
     return page_shell(
         page_title,
         f"""
@@ -1524,10 +1649,15 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
               </label>
               <label class="check-option publish-option">
                 <input id="participant-publish" type="checkbox" {"checked" if publish_checked else ""}>
-                <span>{html.escape(route_text(texts, '/', 'publish_label', 'Name bei Aromaprofil-Kommentaren veröffentlichen'))}</span>
+                <span>{html.escape(route_text(texts, '/', 'publish_label', 'Name bei Freitextbewertungen veröffentlichen'))}</span>
+              </label>
+              <label class="check-option publish-option">
+                <input id="participant-publish-competitive" type="checkbox" {"checked" if publish_competitive_checked else ""}>
+                <span>{html.escape(route_text(texts, '/', 'publish_competitive_label', 'beim Symposium-Minispiel mitmachen'))}</span>
               </label>
             </div>
             <p class="notice" id="participant-state"> </p>
+            {export_panel}
           </section>
 
           <section class="link-grid result-link-grid">
@@ -1577,14 +1707,22 @@ def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
     )
 
 
-def render_results_page(config: dict[str, Any], mode: str = "rankings") -> str:
+def render_results_page(
+    config: dict[str, Any],
+    mode: str = "rankings",
+    export_options: dict[str, Any] | None = None,
+    export_payload: dict[str, Any] | None = None,
+) -> str:
     texts = load_texts()
-    if mode == "oils":
+    if mode == "export":
+        route = "/ergebnisse"
+        fallback_title = "Persönliche Ergebnisse"
+    elif mode == "oils":
         route = "/einzelne-oel-wertungen"
         fallback_title = "Aufschlüsselung je Öl"
     elif mode == "competitive":
         route = "/kompetitive-verkostung"
-        fallback_title = "kompetitive Verkostung"
+        fallback_title = "Symposium-Minispiel"
     else:
         route = "/ergebnisse"
         fallback_title = "Ergebnisse"
@@ -1599,9 +1737,58 @@ def render_results_page(config: dict[str, Any], mode: str = "rankings") -> str:
         """,
         f"""
         <script>window.RESULTS_MODE = {json.dumps(mode)};</script>
+        {f'<script>window.EXPORT_OPTIONS = {json.dumps(export_options or {}, ensure_ascii=False)};</script>' if mode == 'export' else ''}
+        {inline_json_script('EXPORT_PAYLOAD', export_payload or {}) if mode == 'export' else ''}
         <script src="/static/results.js" defer></script>
         """,
     )
+
+
+def browser_executable() -> Path:
+    candidates = [
+        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft/Edge/Application/msedge.exe",
+        Path(os.environ.get("PROGRAMFILES", "")) / "Microsoft/Edge/Application/msedge.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/Edge/Application/msedge.exe",
+        Path(os.environ.get("PROGRAMFILES", "")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google/Chrome/Application/chrome.exe",
+    ]
+    executable = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if executable is None:
+        raise ValueError("Für den PDF-Export wurde keine Chromium- oder Edge-Installation gefunden.")
+    return executable
+
+
+def generate_results_pdf(handler: BaseHTTPRequestHandler, markup: str) -> bytes:
+    token = uuid.uuid4().hex
+    with EXPORT_LOCK:
+        EXPORT_PAGES[token] = markup
+    port = int(handler.server.server_address[1])
+    url = f"http://127.0.0.1:{port}/ergebnisse-export-render/{token}"
+    try:
+        with tempfile.TemporaryDirectory(prefix="umfragen-pdf-") as temp_dir:
+            output_path = Path(temp_dir) / "eigene-ergebnisse.pdf"
+            profile_path = Path(temp_dir) / "browser-profile"
+            command = [
+                str(browser_executable()),
+                "--headless=new",
+                "--disable-gpu",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--run-all-compositor-stages-before-draw",
+                "--virtual-time-budget=6000",
+                "--no-pdf-header-footer",
+                f"--user-data-dir={profile_path}",
+                f"--print-to-pdf={output_path}",
+                url,
+            ]
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+            if completed.returncode != 0 or not output_path.is_file():
+                detail = (completed.stderr or completed.stdout or "unbekannter Browserfehler").strip()
+                raise ValueError(f"PDF konnte nicht erstellt werden: {detail[:300]}")
+            return output_path.read_bytes()
+    finally:
+        with EXPORT_LOCK:
+            EXPORT_PAGES.pop(token, None)
 
 
 def render_oil_selection_page(config: dict[str, Any]) -> str:
@@ -1676,6 +1863,8 @@ def upsert_response(
     respondent: Respondent,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    if event_is_finished():
+        raise ValueError("Die Umfrage ist beendet. Angaben können nur noch eingesehen werden.")
     if not respondent.display_name:
         raise ValueError("Bitte zuerst einen Namen auf der Startseite speichern.")
 
@@ -1814,19 +2003,18 @@ def rank_map(
 ) -> dict[str, int | None]:
     ranked = sorted(
         ((oil_id, value) for oil_id, value in values.items() if value is not None),
-        key=lambda item: rank_sort_key(item[0], item[1], reverse, distributions),
+        key=lambda item: ((-item[1] if reverse else item[1]), item[0]),
     )
     ranks: dict[str, int | None] = {oil_id: None for oil_id in values}
-    previous_key: tuple[float, float, float] | None = None
+    previous_value: float | None = None
     previous_rank = 0
     for index, (oil_id, value) in enumerate(ranked, start=1):
-        current_key = rank_sort_key(oil_id, value, reverse, distributions)[:3]
-        if previous_key is not None and current_key == previous_key:
+        if previous_value is not None and value == previous_value:
             rank = previous_rank
         else:
             rank = index
             previous_rank = rank
-            previous_key = current_key
+            previous_value = value
         ranks[oil_id] = rank
     return ranks
 
@@ -1897,11 +2085,11 @@ def ranking_payload(
             for oil_id, value in values.items()
             if value is not None and oil_id in oil_lookup
         ],
-        key=lambda item: item["rank"] or 999,
+        key=lambda item: (item["rank"] or 999, item["name"].casefold()),
         reverse=False,
     )
     if not reverse:
-        ordered = sorted(ordered, key=lambda item: item["rank"] or 999)
+        ordered = sorted(ordered, key=lambda item: (item["rank"] or 999, item["name"].casefold()))
     return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "color": color, "items": ordered}
 
 
@@ -1928,7 +2116,7 @@ def participant_ranking_payload(
             for participant_id, value in values.items()
             if value is not None and participant_id in participants
         ],
-        key=lambda item: item["rank"] or 999,
+        key=lambda item: (item["rank"] or 999, item["name"].casefold()),
     )
     return {"key": key or slugify(title), "title": title, "subtitle": subtitle, "unit": unit, "color": color, "items": ordered}
 
@@ -1953,11 +2141,12 @@ def competitive_payload(
     participants: dict[str, dict[str, Any]],
     texts: dict[str, Any],
     owner_oil_values: dict[str, list[float]] | None = None,
-    neutral_bias_values: dict[str, float | None] | None = None,
-    neutral_bias_distributions: dict[str, list[float]] | None = None,
+    neutral_comparisons: dict[str, dict[str, list[float]]] | None = None,
+    all_people: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     competitive_texts = dict_at(texts, ("/kompetitive-verkostung",))
     ranking_texts = dict_at(competitive_texts, ("rankings",))
+    all_people = all_people or participants
     survey_ids = {survey["id"] for survey in surveys}
     taste_id = "geschmack" if "geschmack" in survey_ids else (surveys[0]["id"] if surveys else "")
     smell_id = "geruch" if "geruch" in survey_ids else (surveys[1]["id"] if len(surveys) > 1 else taste_id)
@@ -1968,11 +2157,22 @@ def competitive_payload(
         for participant_id, stats in participants.items()
     }
     price_accuracy_ranks = rank_map(price_accuracy_values, reverse=False)
+    spread_distributions: dict[str, list[float]] = {}
+    for participant_id, stats in participants.items():
+        deviations: list[float] = []
+        for vector in stats["vectors_by_oil"].values():
+            values = [float(value) for value in vector.values()]
+            deviations.extend(
+                abs(left - right)
+                for index, left in enumerate(values)
+                for right in values[index + 1 :]
+            )
+        spread_distributions[participant_id] = deviations
     spread_values = {
-        participant_id: population_stdev(stats["overall_values"])
-        for participant_id, stats in participants.items()
+        participant_id: average(values)
+        for participant_id, values in spread_distributions.items()
     }
-    spread_ranks = rank_map(spread_values, reverse=False)
+    spread_ranks = rank_map(spread_values, reverse=False, distributions=spread_distributions)
     average_overall_values = {
         participant_id: average(stats["overall_values"])
         for participant_id, stats in participants.items()
@@ -1996,12 +2196,38 @@ def competitive_payload(
     goat_values = {
         participant_id: average(values)
         for participant_id, values in owner_oil_values.items()
-        if participant_id in participants
+        if participant_id in all_people
     }
     goat_ranks = rank_map(goat_values, reverse=True, distributions=owner_oil_values)
-    neutral_bias_values = neutral_bias_values or {}
-    neutral_bias_distributions = neutral_bias_distributions or {}
-    neutral_bias_ranks = rank_map(neutral_bias_values, reverse=False, distributions=neutral_bias_distributions)
+    neutral_comparisons = neutral_comparisons or {}
+    neutral_bias_values: dict[str, float | None] = {}
+    neutral_bias_signed_values: dict[str, float | None] = {}
+    neutral_intermediates: dict[str, dict[str, float | None]] = {}
+    for participant_id, comparison in neutral_comparisons.items():
+        own_rating = average(comparison.get("own_values", []))
+        other_rating = average(comparison.get("peer_values", []))
+        own_sonne = average_overall_values.get(participant_id)
+        other_sonne = average(
+            [
+                value
+                for other_id, value in average_overall_values.items()
+                if other_id != participant_id and value is not None
+            ]
+        )
+        neutral_intermediates[participant_id] = {
+            "own_rating": own_rating,
+            "other_rating": other_rating,
+        }
+        if None in {own_rating, other_rating, own_sonne, other_sonne}:
+            neutral_bias_values[participant_id] = None
+            neutral_bias_signed_values[participant_id] = None
+            continue
+        own_difference = float(own_rating) - float(own_sonne)
+        other_difference = float(other_rating) - float(other_sonne)
+        signed_bias = own_difference - other_difference
+        neutral_bias_signed_values[participant_id] = signed_bias
+        neutral_bias_values[participant_id] = abs(signed_bias)
+    neutral_bias_ranks = rank_map(neutral_bias_values, reverse=False)
     comment_count_values = {
         participant_id: float(len(stats["comment_texts"]))
         for participant_id, stats in participants.items()
@@ -2013,6 +2239,39 @@ def competitive_payload(
         if stats["comment_lengths"]
     }
     comment_length_ranks = rank_map(comment_length_values, reverse=True)
+    oil_group_costs: dict[str, float] = {}
+    for oil in oils:
+        owner_id = oil.get("brought_by_respondent_id")
+        price = as_float(oil.get("actual_price_per_liter_eur"))
+        if owner_id is None or price is None:
+            continue
+        participant_id = str(owner_id)
+        oil_group_costs[participant_id] = oil_group_costs.get(participant_id, 0.0) + price * 0.035
+    oil_group_cost_ranks = rank_map(oil_group_costs, reverse=True)
+
+    host_id = next(
+        (
+            participant_id
+            for participant_id, stats in participants.items()
+            if str(stats.get("name") or "").strip().casefold() == "erik"
+        ),
+        None,
+    )
+    host_distance_distributions: dict[str, list[float]] = {}
+    host_distance_values: dict[str, float | None] = {}
+    if host_id is not None:
+        host_vectors = participants[host_id]["vectors_by_oil"]
+        for participant_id, stats in participants.items():
+            distances: list[float] = []
+            for oil_id, host_vector in host_vectors.items():
+                participant_vector = stats["vectors_by_oil"].get(oil_id, {})
+                for survey_id in survey_ids:
+                    if survey_id in host_vector and survey_id in participant_vector:
+                        distances.append(abs(float(participant_vector[survey_id]) - float(host_vector[survey_id])))
+            if distances:
+                host_distance_distributions[participant_id] = distances
+                host_distance_values[participant_id] = average(distances)
+    host_distance_ranks = rank_map(host_distance_values, reverse=False)
 
     coordinate_oils = []
     for oil in oils:
@@ -2024,8 +2283,8 @@ def competitive_payload(
                 continue
             vector = [
                 float(vector_by_survey[taste_id]),
-                float(vector_by_survey[smell_id]),
                 float(vector_by_survey[experience_id]),
+                float(vector_by_survey[smell_id]),
             ]
             points.append(
                 {
@@ -2041,6 +2300,7 @@ def competitive_payload(
                 "oil_id": oil_id,
                 "name": oil["name"],
                 "brought_by_name": oil.get("brought_by_name", ""),
+                "brought_by_respondent_id": oil.get("brought_by_respondent_id"),
                 "points": sorted(points, key=lambda item: item["name"]),
             }
         )
@@ -2064,17 +2324,26 @@ def competitive_payload(
                 "σ",
                 ranking_texts.get("participant_spread_subtitle", "niedrigste Streuung zuerst"),
                 key="participant_spread",
-                distributions={participant_id: stats["overall_values"] for participant_id, stats in participants.items()},
+                distributions=spread_distributions,
             ),
             participant_ranking_payload(
                 ranking_texts.get("goat_title", "GOAT-Probanden"),
                 goat_values,
-                participants,
+                all_people,
                 goat_ranks,
                 "Punkte",
                 ranking_texts.get("goat_subtitle", "durchschnittliche Wertung der mitgebrachten Öle"),
                 key="participant_goat",
                 distributions=owner_oil_values,
+            ),
+            participant_ranking_payload(
+                ranking_texts.get("oil_group_zero_title", "Ölgruppe 0 negativ"),
+                oil_group_costs,
+                all_people,
+                oil_group_cost_ranks,
+                "€",
+                ranking_texts.get("oil_group_zero_subtitle", "Kosten von 35 ml aller mitgebrachten Öle, höchste zuerst"),
+                key="participant_oil_group_zero",
             ),
             {
                 **participant_ranking_payload(
@@ -2103,11 +2372,23 @@ def competitive_payload(
                 neutral_bias_values,
                 participants,
                 neutral_bias_ranks,
-                "Punkte±",
+                "Punkte",
                 ranking_texts.get("neutral_bias_subtitle", "niedrige bereinigte Eigenöl-Abweichung zuerst"),
                 key="participant_neutral_bias",
-                distributions=neutral_bias_distributions,
             ),
+            {
+                **participant_ranking_payload(
+                    ranking_texts.get("host_favorite_title", "Gastgebers Liebling...söl?"),
+                    host_distance_values,
+                    participants,
+                    host_distance_ranks,
+                    "Punkte",
+                    ranking_texts.get("host_favorite_subtitle", "Mittlere Distanz zur Wertung von Erik; niedrigste zuerst."),
+                    key="participant_host_favorite",
+                    distributions=host_distance_distributions,
+                ),
+                "crown_rank_offset": 1,
+            },
             participant_ranking_payload(
                 ranking_texts.get("comment_count_title", "Tinte für 1,99€/l"),
                 comment_count_values,
@@ -2142,40 +2423,86 @@ def competitive_payload(
             },
         ]
 
-    crown_scores: dict[str, float] = {participant_id: 0.0 for participant_id in participants}
+    crown_awards: dict[str, dict[str, int]] = {
+        participant_id: {"gold": 0, "silver": 0, "bronze": 0}
+        for participant_id in all_people
+    }
     for ranking in rankings:
         if ranking.get("crowns") is False:
             continue
+        crown_rank_offset = int(ranking.get("crown_rank_offset") or 0)
         for item in ranking.get("items", []):
-            if item.get("rank") == 1:
-                crown_scores[item["participant_id"]] += 3
-            elif item.get("rank") == 2:
-                crown_scores[item["participant_id"]] += 2
-            elif item.get("rank") == 3:
-                crown_scores[item["participant_id"]] += 1
+            award_rank = int(item.get("rank") or 0) - crown_rank_offset
+            awards = crown_awards.setdefault(item["participant_id"], {"gold": 0, "silver": 0, "bronze": 0})
+            if award_rank == 1:
+                awards["gold"] += 1
+            elif award_rank == 2:
+                awards["silver"] += 1
+            elif award_rank == 3:
+                awards["bronze"] += 1
 
-    rankings.append(
-        {
+    crown_scores: dict[str, float] = {
+        participant_id: float(awards["gold"] * 3 + awards["silver"] * 2 + awards["bronze"])
+        for participant_id, awards in crown_awards.items()
+    }
+
+    crown_ranking = {
             **participant_ranking_payload(
-                ranking_texts.get("crown_score_title", "ölymisches Treppchen"),
+                ranking_texts.get("crown_score_title", "ölympisches Treppchen"),
                 crown_scores,
-                participants,
+                all_people,
                 rank_map(crown_scores, reverse=True),
                 "Kronenpunkte",
                 ranking_texts.get("crown_score_subtitle", "Gold 3, Silber 2, Bronze 1 Punkt"),
                 key="participant_crown_score",
             ),
-            "crowns": False,
+            "crowns": True,
         }
-    )
+    for item in crown_ranking.get("items", []):
+        item["crown_awards"] = crown_awards.get(item["participant_id"], {"gold": 0, "silver": 0, "bronze": 0})
+    neutral_ranking = next((ranking for ranking in rankings if ranking.get("key") == "participant_neutral_bias"), None)
+    if neutral_ranking:
+        for item in neutral_ranking.get("items", []):
+            comparison = neutral_intermediates.get(item["participant_id"], {})
+            peer_average = comparison.get("other_rating")
+            own_average = comparison.get("own_rating")
+            item["box"] = None
+            item["value"] = round(neutral_bias_signed_values.get(item["participant_id"]), 2)
+            item["intermediate_values"] = [
+                {
+                    "label": ranking_texts.get("neutral_peer_label", "andere Wertungen:"),
+                    "value": round(peer_average, 2) if peer_average is not None else None,
+                },
+                {
+                    "label": ranking_texts.get("neutral_own_label", "eigene Wertung:"),
+                    "value": round(own_average, 2) if own_average is not None else None,
+                },
+            ]
 
     return {
         "rankings": rankings,
         "coordinate_oils": coordinate_oils,
+        "crown_title": crown_ranking["title"],
+        "crown_subtitle": crown_ranking["subtitle"],
+        "crown_standings": [
+            {
+                "participant_id": item["participant_id"],
+                "name": item["name"],
+                "rank": item["rank"],
+                "score": item["value"],
+                "crowns": item.get("crown_awards", {}),
+            }
+            for item in crown_ranking.get("items", [])
+        ],
     }
 
 
-def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_competitive: bool = False) -> dict[str, Any]:
+def result_payload(
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+    include_competitive: bool = False,
+    viewer_id: int | None = None,
+) -> dict[str, Any]:
     texts = load_texts()
     ranking_texts = dict_at(texts, ("/ergebnisse", "rankings"))
     no_comment_value = text_at(texts, ("/umfrage/:id", "no_comment_value"), "kein Kommentar").casefold()
@@ -2213,11 +2540,12 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
 
     participant_stats: dict[str, dict[str, Any]] = {}
     overall_observations: list[dict[str, Any]] = []
+    personal_by_oil: dict[str, dict[str, Any]] = {}
 
     with connect_db() as db:
         response_rows = db.execute(
             """
-            SELECT sr.*, r.display_name, r.publish_name
+            SELECT sr.*, r.display_name, r.publish_name, r.publish_competitive_name, r.is_participant
             FROM survey_responses sr
             JOIN respondents r ON r.id = sr.respondent_id
             ORDER BY sr.updated_at DESC
@@ -2226,9 +2554,23 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
         session_count = db.execute("SELECT COUNT(*) AS count FROM respondents").fetchone()["count"]
         named_participants = participant_admin_rows(db)
     participant_names = {str(item["id"]): item["display_name"] for item in named_participants}
+    competition_people = {
+        str(item["id"]): participant_stats_template(item["display_name"])
+        for item in named_participants
+    }
+    anonymous_competitive_ids = {
+        str(item["id"])
+        for item in named_participants
+        if item["is_participant"] and not item["publish_competitive_name"]
+    }
+    hidden_competitive_ids = set(anonymous_competitive_ids)
+    if len(hidden_competitive_ids) < 2:
+        hidden_competitive_ids.clear()
 
     tester_ids: set[int] = set()
     for row in response_rows:
+        if not bool(row["is_participant"]):
+            continue
         survey_id = row["survey_id"]
         cipher = row["cipher"]
         oil = sample_lookup.get((survey_id, cipher))
@@ -2249,6 +2591,28 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
             answers = json.loads(row["answers_json"])
         except json.JSONDecodeError:
             answers = {}
+
+        if viewer_id is not None and respondent_id == viewer_id:
+            personal_oil = personal_by_oil.setdefault(
+                oil_id,
+                {"oil_id": oil_id, "name": oil["name"], "surveys": []},
+            )
+            personal_oil["surveys"].append(
+                {
+                    "survey_id": survey_id,
+                    "title": comment_series_labels.get(survey_id, survey.get("title", survey_id)),
+                    "answers": [
+                        {
+                            "field_id": field["id"],
+                            "label": field.get("label", field["id"]),
+                            "kind": field.get("kind", ""),
+                            "value": answers.get(field["id"]),
+                        }
+                        for field in survey.get("fields", [])
+                        if field["id"] in answers
+                    ],
+                }
+            )
 
         overall = as_float(answers.get("overall"))
         if overall is not None:
@@ -2302,20 +2666,11 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
                     "series_label": comment_series_labels.get(survey_id, f"Testreihe {survey_numbers.get(survey_id, '?')}"),
                     "cipher": cipher,
                     "author": str(row["display_name"] or "").strip() if row["publish_name"] else "",
+                    "is_viewer": viewer_id is not None and respondent_id == viewer_id,
                     "text": comment,
                     "updated_at": row["updated_at"],
                 }
             )
-
-    for oil in oils:
-        owner_id = oil.get("brought_by_respondent_id")
-        if owner_id is None:
-            continue
-        participant_id = str(owner_id)
-        participant_stats.setdefault(
-            participant_id,
-            participant_stats_template(participant_names.get(participant_id) or oil.get("brought_by_name") or f"Proband {participant_id}"),
-        )
 
     overall_distributions = {oil_id: oil_stats[oil_id]["overall"] for oil_id in oil_order}
     overall_values = {oil_id: average(overall_distributions[oil_id]) for oil_id in oil_order}
@@ -2370,38 +2725,15 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
         if oil_average is not None:
             owner_oil_values.setdefault(owner_id, []).append(oil_average)
 
-    observations_by_oil_survey: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for observation in overall_observations:
-        observations_by_oil_survey.setdefault((observation["oil_id"], observation["survey_id"]), []).append(observation)
-
-    neutral_delta_distributions: dict[str, list[float]] = {}
+    neutral_comparisons: dict[str, dict[str, list[float]]] = {}
     for observation in overall_observations:
         owner_id = oil_owner_ids.get(observation["oil_id"])
-        if owner_id is None or owner_id != observation["participant_id"]:
+        participant_id = observation["participant_id"]
+        if owner_id is None or owner_id in hidden_competitive_ids or participant_id in hidden_competitive_ids:
             continue
-        peer_values = [
-            float(peer["value"])
-            for peer in observations_by_oil_survey.get((observation["oil_id"], observation["survey_id"]), [])
-            if peer["participant_id"] != owner_id
-        ]
-        peer_average = average(peer_values)
-        if peer_average is None:
-            continue
-        neutral_delta_distributions.setdefault(owner_id, []).append(float(observation["value"]) - peer_average)
-
-    participant_average_values = {
-        participant_id: average(stats["overall_values"])
-        for participant_id, stats in participant_stats.items()
-    }
-    neutral_bias_values: dict[str, float | None] = {}
-    neutral_bias_distributions: dict[str, list[float]] = {}
-    for participant_id, deltas in neutral_delta_distributions.items():
-        baseline = participant_average_values.get(participant_id)
-        if baseline is None:
-            neutral_bias_values[participant_id] = None
-            continue
-        neutral_bias_values[participant_id] = (average(deltas) or 0.0) - baseline
-        neutral_bias_distributions[participant_id] = [delta - baseline for delta in deltas]
+        comparison = neutral_comparisons.setdefault(owner_id, {"own_values": [], "peer_values": []})
+        target = "own_values" if participant_id == owner_id else "peer_values"
+        comparison[target].append(float(observation["value"]))
 
     overall_by_survey_values: dict[str, dict[str, float | None]] = {}
     overall_by_survey_ranks: dict[str, dict[str, int | None]] = {}
@@ -2516,15 +2848,6 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
                 distributions=own_spread_distributions,
             ),
             ranking_payload(
-                ranking_texts.get("accuracy_title", "Trefferquote"),
-                accuracy_values,
-                oils,
-                accuracy_ranks,
-                "%",
-                ranking_texts.get("accuracy_subtitle", "niedrigste Quote zuerst"),
-                key="guess_accuracy",
-            ),
-            ranking_payload(
                 ranking_texts.get("bitter_title", "Bitterkeit"),
                 bitter_values,
                 oils,
@@ -2545,6 +2868,15 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
                 distributions=price_guess_distributions,
             ),
             price_deviation_ranking,
+            ranking_payload(
+                ranking_texts.get("accuracy_title", "Trefferquote"),
+                accuracy_values,
+                oils,
+                accuracy_ranks,
+                "%",
+                ranking_texts.get("accuracy_subtitle", "höchste Quote zuerst"),
+                key="guess_accuracy",
+            ),
         ]
     )
 
@@ -2601,7 +2933,16 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
                     "total": guess_total,
                     "rank": accuracy_ranks.get(oil_id),
                 },
-                "comments": stat["comments"],
+                "personal_surveys": personal_by_oil.get(oil_id, {}).get("surveys", []),
+                "comments": sorted(
+                    stat["comments"],
+                    key=lambda comment: (
+                        not comment.get("is_viewer", False),
+                        survey_numbers.get(comment.get("survey_id"), 999)
+                        if comment.get("is_viewer", False)
+                        else 0,
+                    ),
+                ),
             }
         )
 
@@ -2609,10 +2950,12 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
     correct_guesses = sum(oil_stats[oil_id]["guess_correct"] for oil_id in oil_order)
     total_samples = sum(len(survey.get("samples", [])) for survey in surveys)
     response_count = sum(oil_stats[oil_id]["response_count"] for oil_id in oil_order)
+    comment_count = sum(len(oil_stats[oil_id]["comments"]) for oil_id in oil_order)
     expected_responses = len(tester_ids) * total_samples if tester_ids else 0
 
     payload = {
         "ok": True,
+        "event_finished": event_is_finished(),
         "config": {
             "event": config.get("event", {}),
             "surveys": surveys,
@@ -2622,6 +2965,12 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
             "oil_count": len(oils),
             "session_count": session_count,
             "response_count": response_count,
+            "comment_count": comment_count,
+            "competitor_count": sum(
+                1
+                for participant in named_participants
+                if participant["display_name"] and participant["publish_competitive_name"]
+            ),
             "expected_responses": expected_responses,
             "completion_ratio": round(response_count / expected_responses, 3) if expected_responses else None,
             "guess_accuracy": round(correct_guesses / total_guesses, 3) if total_guesses else None,
@@ -2635,17 +2984,28 @@ def result_payload(config: dict[str, Any], decryption: dict[str, Any], include_c
             "points": price_scatter_points,
         },
         "oils": oil_payload,
+        "personal_responses": sorted(personal_by_oil.values(), key=lambda item: item["name"].casefold()),
         "server_time": now_iso(),
     }
     if include_competitive:
+        competitive_participants = {
+            participant_id: ({**stats, "name": "anonym"} if participant_id in anonymous_competitive_ids else stats)
+            for participant_id, stats in participant_stats.items()
+            if participant_id not in hidden_competitive_ids
+        }
+        competitive_people = {
+            participant_id: ({**stats, "name": "anonym"} if participant_id in anonymous_competitive_ids else stats)
+            for participant_id, stats in competition_people.items()
+            if participant_id not in hidden_competitive_ids
+        }
         payload["competitive"] = competitive_payload(
             oils,
             surveys,
-            participant_stats,
+            competitive_participants,
             texts,
-            owner_oil_values,
-            neutral_bias_values,
-            neutral_bias_distributions,
+            owner_oil_values={key: value for key, value in owner_oil_values.items() if key not in hidden_competitive_ids},
+            neutral_comparisons={key: value for key, value in neutral_comparisons.items() if key not in hidden_competitive_ids},
+            all_people=competitive_people,
         )
     return payload
 
@@ -2714,6 +3074,46 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_html(self, 200, render_results_page(config, "competitive"))
             return
 
+        if path.startswith("/ergebnisse-export-render/"):
+            token = path.rsplit("/", 1)[-1]
+            with EXPORT_LOCK:
+                markup = EXPORT_PAGES.get(token)
+            if markup is None:
+                error_response(self, 404, "Export nicht gefunden oder abgelaufen.")
+                return
+            send_html(self, 200, markup)
+            return
+
+        if path in {"/ergebnisse-export", "/ergebnisse-export.pdf"}:
+            if not event_is_finished():
+                raise ValueError("Der Export ist erst nach Ende der Umfrage verfügbar.")
+            respondent = get_or_create_respondent(self)
+            if not respondent.display_name:
+                raise ValueError("Bitte zuerst auf der Startseite anmelden.")
+            export_options = {
+                "oil_ids": query.get("oil", []),
+                "competitive": query.get("competitive", [""])[0] == "1",
+                "viewer_id": respondent.id,
+            }
+            decryption = load_decryption(config)
+            export_payload = result_payload(
+                config,
+                decryption,
+                include_competitive=export_options["competitive"],
+                viewer_id=respondent.id,
+            )
+            export_payload["viewer_id"] = respondent.id
+            markup = render_results_page(config, "export", export_options, export_payload)
+            pdf = generate_results_pdf(self, markup)
+            send_bytes(
+                self,
+                200,
+                pdf,
+                "application/pdf",
+                {"Content-Disposition": 'attachment; filename="eigene-ergebnisse.pdf"'},
+            )
+            return
+
         if path == "/oel-auswahl":
             send_html(self, 200, render_oil_selection_page(config))
             return
@@ -2734,13 +3134,29 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
 
         if path == "/api/results":
             access_scope = query.get("access", query.get("mode", ["results"]))[0]
-            include_competitive = access_scope == "competitive"
-            if include_competitive:
-                require_competitive_results_password(query.get("password", [""])[0])
-            else:
-                require_results_password(query.get("password", [""])[0])
+            include_competitive = access_scope in {"competitive", "export"}
+            viewer = get_or_create_respondent(self)
+            if access_scope == "export":
+                if not event_is_finished():
+                    raise ValueError("Der Export ist erst nach Ende der Umfrage verfügbar.")
+                if not viewer.display_name:
+                    raise ValueError("Bitte zuerst auf der Startseite anmelden.")
+            if not event_is_finished():
+                if include_competitive:
+                    require_competitive_results_password(query.get("password", [""])[0])
+                else:
+                    require_results_password(query.get("password", [""])[0])
             decryption = load_decryption(config)
-            send_json(self, 200, result_payload(config, decryption, include_competitive=include_competitive))
+            result = result_payload(
+                config,
+                decryption,
+                include_competitive=include_competitive,
+                viewer_id=viewer.id,
+            )
+            if access_scope == "export":
+                result["viewer_id"] = viewer.id
+            headers = {"Set-Cookie": cookie_header(viewer.token)} if viewer.is_new_cookie else None
+            send_json(self, 200, result, headers)
             return
 
         if path == "/api/oils":
@@ -2795,6 +3211,25 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_json(self, 200, update_participant_from_admin(config, decryption, payload))
             return
 
+        if path == "/api/oils/participants/delete":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            decryption = load_decryption(config)
+            send_json(self, 200, delete_participant_from_admin(config, decryption, payload))
+            return
+
+        if path == "/api/oils/event-finished":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            set_event_finished(bool(payload.get("finished")))
+            decryption = load_decryption(config)
+            send_json(self, 200, oil_selection_payload(config, decryption))
+            return
+
         if path == "/api/oils/remove":
             payload = read_json_body(self)
             if not isinstance(payload, dict):
@@ -2829,15 +3264,6 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             require_oil_password(payload.get("password"))
             decryption = load_decryption(config)
             send_json(self, 200, add_dummy_data(config, decryption))
-            return
-
-        if path == "/api/oils/clear":
-            payload = read_json_body(self)
-            if not isinstance(payload, dict):
-                raise ValueError("Payload fehlt.")
-            require_oil_password(payload.get("password"))
-            decryption = load_decryption(config)
-            send_json(self, 200, delete_oil_responses(config, decryption, str(payload.get("oil_id", ""))))
             return
 
         if path == "/api/oils/reset-db":

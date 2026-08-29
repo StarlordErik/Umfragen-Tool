@@ -4,6 +4,7 @@ const pageRoutes = {
   rankings: "/ergebnisse",
   oils: "/einzelne-oel-wertungen",
   competitive: "/kompetitive-verkostung",
+  export: "/ergebnisse",
 };
 const pageRoute = pageRoutes[mode] || "/ergebnisse";
 const revealedOils = new Set();
@@ -182,25 +183,33 @@ const signedNumber = (value) => {
 };
 const rank = (value) => (value ? `${resultsText("rank_prefix", "Platz")} ${value}` : resultsText("rank_missing", "ohne Rang"));
 const isMobileView = () => window.matchMedia("(max-width: 860px)").matches;
-const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselung je Öl" : mode === "competitive" ? "kompetitive Verkostung" : "Ergebnisse");
+const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselung je Öl" : mode === "competitive" ? "Symposium-Minispiel" : "Ergebnisse");
 const pageEyebrow = () => routeText("eyebrow", mode === "oils" ? "detaillierte Ergebnisse" : mode === "competitive" ? "Auswertung nach Probanden" : "Live-Auswertung");
 
 async function loadResults() {
-  if (!state.password) {
-    renderLogin();
+  if (mode === "export" && window.EXPORT_PAYLOAD?.ok) {
+    state.payload = window.EXPORT_PAYLOAD;
+    prepareExportState(state.payload);
+    renderExport(state.payload);
+    document.documentElement.dataset.exportReady = "true";
     return;
   }
-
-  const response = await fetch(`/api/results?access=${encodeURIComponent(loginContext.apiAccess)}&password=${encodeURIComponent(state.password)}`, { credentials: "same-origin" });
+  const apiAccess = mode === "export" ? "export" : loginContext.apiAccess;
+  const response = await fetch(`/api/results?access=${encodeURIComponent(apiAccess)}&password=${encodeURIComponent(state.password)}`, { credentials: "same-origin" });
   const payload = await response.json();
   if (!payload.ok) {
-    window.sessionStorage?.removeItem(PASSWORD_KEY);
+    if (state.password) window.sessionStorage?.removeItem(PASSWORD_KEY);
     state.password = "";
     renderLogin(payload.error || "Passwort ist falsch.");
     return;
   }
 
   state.payload = payload;
+  if (mode === "export") {
+    prepareExportState(payload);
+    renderExport(payload);
+    return;
+  }
   if (mode === "competitive" && (state.selectingCompetitiveOil || state.rotatingTasteSpace)) {
     updateTasteSpace();
     return;
@@ -261,25 +270,137 @@ function render(payload) {
         <p class="eyebrow">${escapeHtml(pageEyebrow())}</p>
         <h1>${escapeHtml(pageHeading())}</h1>
       </div>
-      <div class="topbar-actions results-actions">
-        <a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a>
-      </div>
+      ${["rankings", "oils", "competitive"].includes(mode) ? "" : `<div class="topbar-actions results-actions"><a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a></div>`}
     </section>
 
-    ${
-      mode === "rankings"
-        ? `<section class="kpi-grid compact">
-            ${metricCard(resultsText("tester_count", "Probanden"), summary.tester_count)}
-            ${metricCard(resultsText("oil_count", "Anzahl Öle"), summary.oil_count)}
-            ${metricCard(resultsText("response_count", "abgegebene Wertungen"), summary.response_count)}
-          </section>`
-        : ""
-    }
+    ${renderResultsCommands(summary)}
 
     ${mode === "oils" ? renderOilSection(payload) : mode === "competitive" ? renderCompetitiveSection(payload) : renderRankingSection(payload)}
   `;
   restoreCommentScroll();
+  syncRankingCardHeights();
+  const masterList = app.querySelector(".oil-master-list");
+  if (masterList) app.style.setProperty("--oil-list-height", `${Math.max(190, masterList.scrollHeight)}px`);
 }
+
+function renderResultsCommands(summary) {
+  if (!["rankings", "oils", "competitive"].includes(mode)) return "";
+  const homeLink = `<a class="ghost-button command-home" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a>`;
+  let areaLinks = "";
+  let thirdLabel = resultsText("response_count", "abgegebene Einzelwertungen");
+  let thirdValue = summary.response_count;
+  if (mode === "rankings") {
+    areaLinks = `
+      <a class="ghost-button command-detail" href="/einzelne-oel-wertungen">${escapeHtml(resultsText("detail_link", "Aufschlüsselung nach Produkt"))}</a>
+      <a class="ghost-button command-competitive" href="/kompetitive-verkostung">${escapeHtml(resultsText("competitive_link", "Symposium-Minispiel"))}</a>`;
+  } else if (mode === "oils") {
+    thirdLabel = oilText("comment_count", "Anzahl Kommentare");
+    thirdValue = summary.comment_count;
+    areaLinks = `
+      <a class="ghost-button command-overview" href="/ergebnisse">${escapeHtml(oilText("overview_link", "zurück zur Ergebnis-Startseite"))}</a>
+      <a class="ghost-button command-competitive" href="/kompetitive-verkostung">${escapeHtml(resultsText("competitive_link", "Symposium-Minispiel"))}</a>`;
+  } else {
+    thirdLabel = routeText("competitor_count", "Mitspieler");
+    thirdValue = summary.competitor_count;
+    areaLinks = `
+      <a class="ghost-button command-overview" href="/ergebnisse">${escapeHtml(resultsText("overview_link", "zurück zur Ergebnis-Startseite"))}</a>
+      <a class="ghost-button command-detail" href="/einzelne-oel-wertungen">${escapeHtml(resultsText("detail_link", "Aufschlüsselung nach Produkt"))}</a>`;
+  }
+  return `
+    <section class="results-command-grid">
+      <nav class="results-command-links ${escapeHtml(mode)}-links" aria-label="Ergebnisbereiche">
+        ${homeLink}
+        ${areaLinks}
+      </nav>
+      <div class="results-kpi-grid">
+        ${metricCard(resultsText("tester_count", "Probanden"), summary.tester_count)}
+        ${metricCard(resultsText("oil_count", "Anzahl Öle"), summary.oil_count)}
+        ${metricCard(thirdLabel, thirdValue)}
+      </div>
+    </section>
+  `;
+}
+
+function syncRankingCardHeights() {
+  app.style.removeProperty("--ranking-header-height");
+  if (isMobileView()) return;
+  const headers = [...app.querySelectorAll(".ranking-card-toggle")];
+  if (!headers.length) return;
+  const height = Math.max(...headers.map((header) => Math.ceil(header.scrollHeight)));
+  app.style.setProperty("--ranking-header-height", `${height}px`);
+}
+
+function prepareExportState(payload) {
+  state.allRankingsExpanded = true;
+  for (const ranking of payload.rankings || []) {
+    const id = `global-${ranking.key}`;
+    openRankings.add(id);
+    expandedRankings.add(id);
+  }
+  for (const ranking of payload.competitive?.rankings || []) {
+    const id = `competitive-${ranking.key}`;
+    openRankings.add(id);
+    expandedRankings.add(id);
+  }
+  const coordinateOils = (payload.competitive?.coordinate_oils || []).filter((oil) => (oil.points || []).length);
+  const overallOrder = new Map((findRanking(payload.rankings || [], "overall_all")?.items || []).map((item, index) => [item.oil_id, index]));
+  const owned = coordinateOils.filter((oil) => String(oil.brought_by_respondent_id || "") === String(payload.viewer_id || window.EXPORT_OPTIONS?.viewer_id || ""));
+  const candidates = owned.length ? owned : coordinateOils;
+  candidates.sort((left, right) => (overallOrder.get(left.oil_id) ?? 999) - (overallOrder.get(right.oil_id) ?? 999));
+  const selected = candidates[0];
+  state.competitiveOilIndex = Math.max(0, coordinateOils.findIndex((oil) => oil.oil_id === selected?.oil_id));
+}
+
+function renderExport(payload) {
+  const options = window.EXPORT_OPTIONS || {};
+  const oilIds = new Set(options.oil_ids || []);
+  const selectedOils = (payload.oils || []).filter((oil) => oilIds.has(oil.id));
+  const personalByOil = new Map((payload.personal_responses || []).map((entry) => [entry.oil_id, entry]));
+  app.classList.add("pdf-export-page");
+  app.innerHTML = `
+    <section class="export-cover"><p class="eyebrow">${escapeHtml(resultsText("eyebrow", "Ergebnisse"))}</p><h1>${escapeHtml(resultsText("heading", "Ergebnisse"))}</h1></section>
+    <section class="export-general">${renderOverallChart(payload)}${renderPriceScatterChart(payload)}<div class="ranking-grid">${(payload.rankings || []).map((ranking) => renderRankingCard(ranking, `global-${ranking.key}`)).join("")}</div></section>
+    ${selectedOils.map((oil) => `<section class="export-oil-page">${renderOilCard(oil, payload.config.surveys, payload.rankings, { forceOpen: true, staticHeader: true, hideToggleIcon: true, hideCipherShield: true })}${renderPersonalResponses(personalByOil.get(oil.id))}</section>`).join("")}
+    ${options.competitive ? `<section class="export-competitive"><h2>${escapeHtml(text(["/kompetitive-verkostung", "heading"], "Symposium-Minispiel"))}</h2>${renderTasteSpace(payload.competitive || {})}${renderCrownChart(payload.competitive || {})}<div class="ranking-grid compact">${(payload.competitive?.rankings || []).map((ranking) => renderRankingCard(ranking, `competitive-${ranking.key}`)).join("")}</div></section>` : ""}
+  `;
+  for (const details of app.querySelectorAll("details")) details.open = true;
+}
+
+function renderPersonalResponses(entry) {
+  if (!entry?.surveys?.length) {
+    return `<article class="personal-response-card"><h3>${escapeHtml(resultsText("personal_answers_title", "Eigene Umfrage-Angaben"))}</h3><p class="notice">${escapeHtml(resultsText("personal_answers_empty", "Für dieses Öl wurden keine eigenen Angaben gespeichert."))}</p></article>`;
+  }
+  return `
+    <article class="personal-response-card">
+      <h3>${escapeHtml(resultsText("personal_answers_title", "Eigene Umfrage-Angaben"))}</h3>
+      <div class="personal-response-series">
+        ${entry.surveys.map((survey) => `<section><h4>${escapeHtml(survey.title)}</h4><dl>${(survey.answers || []).map((answer) => `<div><dt>${escapeHtml(answer.label)}</dt><dd>${escapeHtml(formatPersonalAnswer(answer))}</dd></div>`).join("")}</dl></section>`).join("")}
+      </div>
+    </article>`;
+}
+
+function formatPersonalAnswer(answer) {
+  const value = answer?.value;
+  if (value === null || value === undefined || value === "") return globalText("open_value", "offen");
+  if (typeof value === "number") return Number(value).toFixed(2).replace(/,00$|\.00$/, "").replace(".", ",");
+  return String(value);
+}
+
+function fitExportComments() {
+  if (mode !== "export") return;
+  for (const page of app.querySelectorAll(".export-oil-page")) {
+    const comments = page.querySelector(".comment-scroll");
+    if (!comments) continue;
+    let size = 8;
+    comments.style.fontSize = `${size}pt`;
+    while (page.scrollHeight > page.clientHeight + 1 && size > 4.5) {
+      size -= 0.25;
+      comments.style.fontSize = `${size}pt`;
+    }
+  }
+}
+
+window.addEventListener("beforeprint", fitExportComments);
 
 function renderRankingSection(payload) {
   const forceExpanded = state.allRankingsExpanded && !isMobileView();
@@ -299,7 +420,7 @@ function renderRankingSection(payload) {
       </div>
       <div class="detail-link-panel">
         <a class="ghost-button" href="/einzelne-oel-wertungen">${escapeHtml(resultsText("detail_link", "Aufschlüsselung je Öl"))}</a>
-        <a class="ghost-button" href="/kompetitive-verkostung">${escapeHtml(resultsText("competitive_link", "kompetitive Verkostung"))}</a>
+        <a class="ghost-button" href="/kompetitive-verkostung">${escapeHtml(resultsText("competitive_link", "Symposium-Minispiel"))}</a>
       </div>
     </section>
   `;
@@ -520,18 +641,14 @@ function renderOilSection(payload) {
   const oils = [...payload.oils].sort((a, b) => a.name.localeCompare(b.name, "de-DE"));
   if (!isMobileView() && oils.length) {
     const selectedId = [...openOils].find((id) => oils.some((oil) => oil.id === id));
-    if (!selectedId) {
-      openOils.clear();
-      openOils.add(oils[0].id);
-    }
-    const selectedOil = oils.find((oil) => openOils.has(oil.id)) || oils[0];
+    const selectedOil = selectedId ? oils.find((oil) => oil.id === selectedId) : null;
     return `
       <section class="overview-section oil-split-view">
         <div class="oil-master-list">
           ${oils.map((oil) => renderOilCard(oil, payload.config.surveys, payload.rankings, { summaryOnly: true })).join("")}
         </div>
         <div class="oil-detail-pane">
-          ${renderOilCard(selectedOil, payload.config.surveys, payload.rankings, { forceOpen: true, staticHeader: true, hideToggleIcon: true })}
+          ${selectedOil ? renderOilCard(selectedOil, payload.config.surveys, payload.rankings, { forceOpen: true }) : renderOilPlaceholder()}
         </div>
       </section>
     `;
@@ -545,11 +662,17 @@ function renderOilSection(payload) {
   `;
 }
 
+function renderOilPlaceholder() {
+  return `<div class="oil-detail-placeholder"><div class="oil-still-life" aria-hidden="true"><span class="bottle"></span><span class="bread"></span><i class="olive one"></i><i class="olive two"></i><i class="olive three"></i></div><p>${escapeHtml(oilText("select_product_notice", "wähle links ein Produkt aus"))}</p></div>`;
+}
+
 function renderCompetitiveSection(payload) {
   const competitive = payload.competitive || {};
   const forceExpanded = state.allRankingsExpanded && !isMobileView();
   return `
     <section class="overview-section competitive-section">
+      ${renderTasteSpace(competitive)}
+      ${renderCrownChart(competitive)}
       <div class="section-heading ranking-section-heading">
         <div>
           <h2>${escapeHtml(routeText("ranking_heading", "Ranglisten"))}</h2>
@@ -560,9 +683,45 @@ function renderCompetitiveSection(payload) {
       <div class="ranking-grid compact">
         ${(competitive.rankings || []).map((ranking) => renderRankingCard(ranking, `competitive-${ranking.key}`)).join("")}
       </div>
-      ${renderTasteSpace(competitive)}
     </section>
   `;
+}
+
+function renderCrownChart(competitive) {
+  const standings = competitive.crown_standings || [];
+  if (!standings.length) return "";
+  return `
+    <article class="metric-card crown-chart-card">
+      <h2>${escapeHtml(competitive.crown_title || routeText("crown_chart_title", "ölympisches Treppchen"))}</h2>
+      <p class="metric-sub">${escapeHtml(competitive.crown_subtitle || routeText("crown_chart_subtitle", "Gold 3 Punkte, Silber 2 Punkte, Bronze 1 Punkt."))}</p>
+      ${renderCrownLegend()}
+      <div class="crown-chart-scroll">
+        <div class="crown-chart-content" style="--crown-columns:${escapeHtml(standings.length)}">
+          <div class="crown-chart-plot">
+            <div class="crown-chart">
+              ${standings.map((entry) => `<div class="crown-chart-person"><div class="crown-chart-stack">${renderCrownStack(entry.crowns)}</div></div>`).join("")}
+            </div>
+          </div>
+          <div class="crown-chart-names">
+            ${standings.map((entry) => `<strong title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</strong>`).join("")}
+          </div>
+        </div>
+      </div>
+    </article>`;
+}
+
+function renderCrownLegend() {
+  return `<div class="crown-chart-legend">
+    <span>${renderCrownIcons({ gold: 1 }, true)}<b>: 3</b></span>
+    <span>${renderCrownIcons({ silver: 1 }, true)}<b>: 2</b></span>
+    <span>${renderCrownIcons({ bronze: 1 }, true)}<b>: 1</b></span>
+    <span>${renderCrownIcons({ blue: 1 }, true)}<b>: ${escapeHtml(routeText("participation_crown_label", "Mitmach-Krone"))}</b></span>
+  </div>`;
+}
+
+function renderCrownStack(awards = {}) {
+  const total = Number(awards.gold || 0) + Number(awards.silver || 0) + Number(awards.bronze || 0);
+  return total ? renderCrownIcons(awards) : renderCrownIcons({ blue: 1 });
 }
 
 function renderTasteSpace(competitive) {
@@ -648,8 +807,8 @@ function updateTasteSpace() {
 
 function renderTasteSpaceSvg(points) {
   const axisX = routeText("space_x_axis", "Geschmack");
-  const axisY = routeText("space_y_axis", "Geruch");
-  const axisZ = routeText("space_z_axis", "volle Erfahrung");
+  const axisY = routeText("space_y_axis", "volle Erfahrung");
+  const axisZ = routeText("space_z_axis", "Geruch");
   const renderedPoints = points
     .map((point, index) => ({
       point,
@@ -729,7 +888,7 @@ function render3dLabel(position, label, anchor = "middle", className = "taste-ax
 
 function render3dPoint(point, index, projected = project3d(Number(point.x), Number(point.y), Number(point.z))) {
   const labelLeft = projected.x > 70;
-  const title = `${point.name}: ${routeText("space_x_axis", "Geschmack")} ${number(point.x)}, ${routeText("space_y_axis", "Geruch")} ${number(point.y)}, ${routeText("space_z_axis", "volle Erfahrung")} ${number(point.z)}`;
+  const title = `${point.name}: ${routeText("space_x_axis", "Geschmack")} ${number(point.x)}, ${routeText("space_y_axis", "volle Erfahrung")} ${number(point.y)}, ${routeText("space_z_axis", "Geruch")} ${number(point.z)}`;
   const radius = 1.45 + ((projected.depth + 8.66) / 17.32) * 0.45;
   return `
     <g class="taste-point ${labelLeft ? "label-left" : ""}" transform="translate(${escapeHtml(projected.x.toFixed(2))} ${escapeHtml(projected.y.toFixed(2))})">
@@ -759,7 +918,7 @@ function renderRankingCard(ranking, id) {
   const domain = rankingDomain(ranking.items, ranking);
   const showToggle = ranking.items.length > 3 && !forceExpanded;
   return `
-    <article class="metric-card ranking-card ${open ? "open" : ""}" style="--ranking-color:${escapeHtml(rankingColorAccent(ranking, "card"))}" data-ranking-card="${escapeHtml(id)}">
+    <article class="metric-card ranking-card ${open ? "open" : ""} ${expanded ? "expanded" : ""}" style="--ranking-color:${escapeHtml(rankingColorAccent(ranking, "card"))}" data-ranking-card="${escapeHtml(id)}">
       <button class="ranking-card-toggle" type="button" data-action="toggle-ranking-card" data-ranking-id="${escapeHtml(id)}">
         <span class="ranking-card-title">
           <h3>${escapeHtml(ranking.title)}</h3>
@@ -779,24 +938,27 @@ function renderRankingItem(item, ranking, currentOilId, index, total, domain, sh
   const value = formatByUnit(item.value, ranking.unit);
   const itemId = item.oil_id || item.participant_id || item.id;
   const current = itemId === currentOilId ? " current" : "";
-  const rankRatio = total <= 1 ? 0 : index / (total - 1);
+  const rankRatio = total <= 1 ? 0 : Math.max(0, Number(item.rank || index + 1) - 1) / (total - 1);
   const color = rankingColor(ranking, rankRatio, variant, item.value);
   const graph = showBoxPlot ? renderRankingGraph(item, ranking, domain) : "";
+  const earnedCrowns = item.crown_awards ? `<div class="earned-crowns">${renderCrownIcons(item.crown_awards, true)}</div>` : "";
   return `
-    <li class="${current}${graph ? " has-graph" : ""}" style="--rank-bg:${escapeHtml(color)}">
-      ${renderRankPlace(item.rank, rankingUsesCrowns(ranking))}
+    <li class="${current}${graph || earnedCrowns ? " has-graph" : ""}${earnedCrowns ? " has-awards" : ""}" style="--rank-bg:${escapeHtml(color)}">
+      ${renderRankPlace(item.rank, ranking)}
       <span class="rank-name">${escapeHtml(item.name)}</span>
       <strong>${escapeHtml(value)}</strong>
+      ${earnedCrowns}
       ${graph}
     </li>
   `;
 }
 
-function renderRankPlace(rankValue, useCrown = true) {
+function renderRankPlace(rankValue, ranking) {
   const place = Number(rankValue);
-  if (useCrown && [1, 2, 3].includes(place)) {
+  const crownPlace = place - Number(ranking?.crown_rank_offset || 0);
+  if (rankingUsesCrowns(ranking) && [1, 2, 3].includes(crownPlace)) {
     return `
-      <span class="rank-place crown-place crown-${escapeHtml(place)}" title="${escapeHtml(rank(place))}" aria-label="${escapeHtml(rank(place))}">
+      <span class="rank-place crown-place crown-${escapeHtml(crownPlace)}" title="${escapeHtml(rank(place))}" aria-label="${escapeHtml(rank(place))}">
         <span class="crown-shape" aria-hidden="true"></span>
         <span class="crown-number">${escapeHtml(place)}</span>
       </span>
@@ -805,7 +967,22 @@ function renderRankPlace(rankValue, useCrown = true) {
   return `<span class="rank-place">${escapeHtml(rankValue || "")}</span>`;
 }
 
+function renderCrownIcons(awards = {}, compact = false) {
+  const groups = [
+    ["gold", Number(awards.gold || 0), 1, "Gold"],
+    ["silver", Number(awards.silver || 0), 2, "Silber"],
+    ["bronze", Number(awards.bronze || 0), 3, "Bronze"],
+    ["blue", Number(awards.blue || 0), null, "Blau"],
+  ];
+  return groups
+    .map(([type, count, place, label]) => Array.from({ length: count }, () => `<span class="award-crown award-crown-${type} ${place ? `crown-${place}` : ""} ${compact ? "compact" : ""}" title="${escapeHtml(label + "krone")}" aria-label="${escapeHtml(label + "krone")}"><i></i></span>`).join(""))
+    .join("");
+}
+
 function renderRankingGraph(item, ranking, domain) {
+  if (item.intermediate_values?.length) {
+    return `<div class="rank-intermediate-values">${item.intermediate_values.map((entry) => `<span><em>${escapeHtml(entry.label)}</em><strong>${escapeHtml(number(entry.value))}</strong></span>`).join("")}</div>`;
+  }
   if (ranking.graph === "price_deviation") return renderPriceDeviationPlot(item, ranking.price_domain);
   if (["spread", "own_spread"].includes(ranking.key)) return "";
   if (item.box) return renderBoxPlot(item.box, domain, ranking.unit);
@@ -822,22 +999,26 @@ function renderBoxPlot(box, domain, unit) {
   const title = `n=${box.count}, min ${formatByUnit(box.min, unit)}, Median ${formatByUnit(box.median ?? box.avg, unit)}, max ${formatByUnit(box.max, unit)}`;
   return `
     <div class="rank-boxplot" title="${escapeHtml(title)}">
-      ${renderBoxPlotScale(domain, unit)}
-      <span class="boxplot-whisker" style="left:${left}%;width:${Math.max(1, right - left)}%"></span>
-      <span class="boxplot-box" style="left:${q1}%;width:${Math.max(1, q3 - q1)}%"></span>
-      <span class="boxplot-median" style="left:${medianValue}%"></span>
+      <em class="boxplot-edge-label first">${escapeHtml(formatScaleLabel(domain.min, unit))}</em>
+      <span class="boxplot-track">
+        ${renderBoxPlotScale(domain, unit, false)}
+        <span class="boxplot-whisker" style="left:${left}%;width:${Math.max(1, right - left)}%"></span>
+        <span class="boxplot-box" style="left:${q1}%;width:${Math.max(1, q3 - q1)}%"></span>
+        <span class="boxplot-median" style="left:${medianValue}%"></span>
+      </span>
+      <em class="boxplot-edge-label last">${escapeHtml(formatScaleLabel(domain.max, unit))}</em>
     </div>
   `;
 }
 
-function renderBoxPlotScale(domain, unit = "") {
+function renderBoxPlotScale(domain, unit = "", edgeLabels = true) {
   const ticks = [];
   const step = Number(domain.step) || (domain.max - domain.min <= 10 ? 1 : 5);
   const tickCount = Math.round((domain.max - domain.min) / step);
   for (let index = 0; index <= tickCount; index += 1) {
     const value = index === tickCount ? domain.max : domain.min + step * index;
     const edge = index === 0 ? " first" : index === tickCount ? " last" : "";
-    const label = edge ? `<em>${escapeHtml(formatScaleLabel(value, unit))}</em>` : "";
+    const label = edge && edgeLabels ? `<em>${escapeHtml(formatScaleLabel(value, unit))}</em>` : "";
     ticks.push(`<span class="${edge}" style="left:${escapeHtml(position(value, domain))}%">${label}</span>`);
   }
   return `<span class="boxplot-scale" aria-hidden="true">${ticks.join("")}</span>`;
@@ -847,7 +1028,10 @@ function formatScaleLabel(value, unit) {
   const rounded = Math.round(Number(value));
   if (unit === "%") return `${Math.round(Number(value) * 100)}%`;
   if (unit === "€" || unit === "€±") return `${rounded} €`;
-  if (unit === "Punkte±") return signedNumber(value);
+  if (unit === "Punkte±") {
+    const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+    return `${sign}${Math.abs(rounded)}`;
+  }
   return String(rounded);
 }
 
@@ -868,18 +1052,23 @@ function renderPriceDeviationPlot(item, domain) {
   const percentLabel = item.price_deviation_percent === null || item.price_deviation_percent === undefined ? "" : `, ${signedPercentPoints(item.price_deviation_percent)}`;
   return `
     <div class="rank-price-deviation" title="${escapeHtml(`Realpreis ${currency(actual)}, Schätzung ${currency(guess)}${percentLabel}`)}">
-      ${renderBoxPlotScale(domain, "€")}
-      <span class="price-deviation-range ${direction}" style="left:${escapeHtml(left)}%;width:${escapeHtml(Math.max(1, right - left))}%">
-        <span class="price-deviation-label">${escapeHtml(signedWholeCurrency(eurDeviation))}</span>
+      <em class="boxplot-edge-label first">${escapeHtml(formatScaleLabel(domain.min, "€"))}</em>
+      <span class="price-deviation-track">
+        ${renderBoxPlotScale(domain, "€", false)}
+        <span class="price-deviation-range ${direction}" style="left:${escapeHtml(left)}%;width:${escapeHtml(Math.max(1, right - left))}%">
+          <span class="price-deviation-label">${escapeHtml(signedWholeCurrency(eurDeviation))}</span>
+        </span>
+        <span class="price-marker actual" style="left:${escapeHtml(actualPos)}%"></span>
+        <span class="price-marker guess" style="left:${escapeHtml(guessPos)}%"></span>
       </span>
-      <span class="price-marker actual" style="left:${escapeHtml(actualPos)}%"></span>
-      <span class="price-marker guess" style="left:${escapeHtml(guessPos)}%"></span>
+      <em class="boxplot-edge-label last">${escapeHtml(formatScaleLabel(domain.max, "€"))}</em>
     </div>
   `;
 }
 
 function renderOilCard(oil, surveys, rankings, options = {}) {
   const open = Boolean(options.forceOpen) || openOils.has(oil.id);
+  const commentsTitle = oilText("comments_title", "Kommentare zum Aromaprofil von {oil}:").replaceAll("{oil}", oil.name);
   const toggleContent = `
         <h3>${escapeHtml(oil.name)}</h3>
         ${options.hideToggleIcon ? "" : `<span>${open ? "-" : "+"}</span>`}
@@ -903,10 +1092,10 @@ function renderOilCard(oil, surveys, rankings, options = {}) {
         <div class="cipher-box ${revealedOils.has(oil.id) ? "revealed" : ""}">
           <div class="cipher-values">
             ${surveys
-              .map((survey) => `<span><b>${escapeHtml(seriesLabel(survey))}</b>${escapeHtml(displayCipher(oil.ciphers[survey.id], survey))}</span>`)
+              .map((survey) => renderCipherValue(oil, survey, surveys))
               .join("")}
           </div>
-          ${revealedOils.has(oil.id) ? "" : `<button class="cipher-shield" type="button" data-action="reveal">${escapeHtml(oilText("decrypt_button", "Dechiffrierung aufdecken"))}</button>`}
+          ${options.hideCipherShield || revealedOils.has(oil.id) ? "" : `<button class="cipher-shield" type="button" data-action="reveal">${escapeHtml(oilText("decrypt_button", "Dechiffrierung aufdecken"))}</button>`}
         </div>
 
         <div class="oil-stats">
@@ -914,7 +1103,7 @@ function renderOilCard(oil, surveys, rankings, options = {}) {
         </div>
 
         <div class="comment-panel">
-          <h4>${escapeHtml(oilText("comments_title", "Kommentare zum Aromaprofil"))}</h4>
+          <h4>${escapeHtml(commentsTitle)}</h4>
           <div class="comment-scroll" data-scroll-key="${escapeHtml(oil.id)}">
             ${oil.comments.length ? oil.comments.map(renderComment).join("") : `<p class="notice">${escapeHtml(oilText("comments_empty", "Noch keine Kommentare."))}</p>`}
           </div>
@@ -922,6 +1111,39 @@ function renderOilCard(oil, surveys, rankings, options = {}) {
       </div>`}
     </article>
   `;
+}
+
+function renderCipherValue(oil, survey, surveys) {
+  const personalSurvey = (oil.personal_surveys || []).find((entry) => entry.survey_id === survey.id);
+  const answers = new Map((personalSurvey?.answers || []).map((answer) => [answer.field_id, answer]));
+  const overall = answers.get("overall");
+  const bitter = survey.id === "geschmack" ? answers.get("bitter") : null;
+  const price = survey.id === "gesamt" ? answers.get("price_guess") : null;
+  const ownRatingFallbacks = {
+    geschmack: "eigene Geschmackswertung",
+    geruch: "eigene Geruchswertung",
+    gesamt: "eigene Wertung der vollen Erfahrung",
+  };
+  const ownRatingLabel = oilText(`own_${survey.id}_rating_label`, ownRatingFallbacks[survey.id] || "eigene Wertung");
+  const personalRows = [
+    overall ? `${ownRatingLabel}: ${formatPersonalAnswer(overall)}` : "",
+    bitter ? `${oilText("own_bitter_label", "eigene Bitterkeitswahrnehmung")}: ${formatPersonalAnswer(bitter)}` : "",
+    price ? `${oilText("own_price_label", "Preiseinschätzung")}: ${formatPersonalAnswer(price)} €` : "",
+  ].filter(Boolean);
+  const classification = survey.id === "geruch" ? renderOwnClassification(oil, surveys) : "";
+  return `<div class="cipher-value"><b>${escapeHtml(seriesLabel(survey))}</b><i class="cipher-code">${escapeHtml(displayCipher(oil.ciphers[survey.id], survey))}</i>${personalRows.map((row) => `<small>${escapeHtml(row)}</small>`).join("")}${classification}</div>`;
+}
+
+function renderOwnClassification(oil, surveys) {
+  const personalBySurvey = new Map((oil.personal_surveys || []).map((entry) => [entry.survey_id, entry]));
+  const marks = surveys.map((survey) => {
+    const answer = (personalBySurvey.get(survey.id)?.answers || []).find((entry) => entry.field_id === "oil_guess");
+    if (!answer || answer.value === null || answer.value === undefined || answer.value === "") return '<em class="classification-mark missing">–</em>';
+    const normalized = String(answer.value).trim().toLocaleLowerCase("de-DE");
+    const classifiedAsOlive = ["olivenöl", "olivenoel", "ja", "yes", "true", "1"].includes(normalized);
+    return `<em class="classification-mark ${classifiedAsOlive ? "yes" : "no"}">${classifiedAsOlive ? "✓" : "✕"}</em>`;
+  });
+  return `<small class="own-classification"><i class="classification-label">${escapeHtml(oilText("own_classification_label", "eigene Olivenöl-Klassifizierung"))}:</i> ${marks.join('<i class="classification-separator">|</i>')}</small>`;
 }
 
 function renderBreakdownCategories(oil, surveys, rankings) {
@@ -1045,7 +1267,8 @@ function boxDomain(items) {
   if (!values.length) return null;
   const rawMin = Math.min(...values);
   const rawMax = Math.max(...values);
-  const step = rawMax - rawMin <= 10 ? 1 : 5;
+  const absoluteMax = Math.max(Math.abs(rawMin), Math.abs(rawMax));
+  const step = absoluteMax > 100 ? 20 : absoluteMax > 50 ? 10 : rawMax - rawMin <= 10 ? 1 : 5;
   let min = Math.floor(rawMin / step) * step;
   let max = Math.ceil(rawMax / step) * step;
   if (min === max) {
@@ -1061,12 +1284,11 @@ function position(value, domain) {
 
 function rankingColorAccent(ranking, variant = "mini") {
   if (ranking.color) return ranking.color;
-  if (variant === "card" && ["spread", "own_spread"].includes(ranking.key)) return "var(--blue-ranking-color)";
   return "var(--neutral-ranking-color)";
 }
 
 function rankingColor(ranking, rankRatio, variant = "mini", value = null) {
-  if (["price_guess", "participant_average_overall", "participant_bitter"].includes(ranking.key) || (variant === "card" && ["spread", "own_spread"].includes(ranking.key))) return priceGradientColor(rankRatio);
+  if (["spread", "own_spread", "participant_average_overall", "participant_oil_group_zero", "participant_bitter"].includes(ranking.key)) return priceGradientColor(rankRatio);
   if (["guess_accuracy", "participant_classification"].includes(ranking.key) && value !== null && value !== undefined) {
     return gradientColor(1 - Math.max(0, Math.min(1, Number(value))));
   }
@@ -1149,8 +1371,11 @@ function handleClick(event) {
   if (oilToggle) {
     const id = oilToggle.dataset.oilId;
     if (!isMobileView()) {
-      openOils.clear();
-      openOils.add(id);
+      if (openOils.has(id)) openOils.clear();
+      else {
+        openOils.clear();
+        openOils.add(id);
+      }
     } else if (openOils.has(id)) {
       openOils.delete(id);
     } else {
@@ -1241,6 +1466,7 @@ loadResults().catch((error) => {
 });
 
 setInterval(() => {
+  if (mode === "export") return;
   if (state.selectingCompetitiveOil || state.rotatingTasteSpace) return;
   if (state.password) loadResults().catch(() => undefined);
 }, 2000);

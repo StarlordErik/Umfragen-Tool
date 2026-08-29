@@ -24,10 +24,22 @@ function participantElements() {
   return {
     name: document.getElementById("participant-name"),
     publish: document.getElementById("participant-publish"),
+    publishCompetitive: document.getElementById("participant-publish-competitive"),
     state: document.getElementById("participant-state"),
     infoButton: document.getElementById("participant-info-button"),
     infoPopover: document.getElementById("participant-info-popover"),
   };
+}
+
+function applyPublicationLocks(eventFinished) {
+  const { publish, publishCompetitive } = participantElements();
+  for (const input of [publish, publishCompetitive]) {
+    if (!input) continue;
+    input.disabled = Boolean(eventFinished && input.checked);
+    input.title = input.disabled
+      ? homeText("publish_locked_notice", "Nach Ende der Umfrage kann eine Veröffentlichung nicht mehr zurückgenommen werden.")
+      : "";
+  }
 }
 
 function setParticipantState(message, error = false) {
@@ -43,6 +55,9 @@ function updateSurveyAccess(displayName) {
     link.classList.toggle("locked-link", !hasName);
     link.setAttribute("aria-disabled", hasName ? "false" : "true");
   }
+  for (const button of homeApp?.querySelectorAll('.export-panel button[type="submit"]') || []) {
+    button.disabled = !hasName;
+  }
   return hasName;
 }
 
@@ -54,6 +69,8 @@ async function loadParticipant() {
   const elements = participantElements();
   if (elements.name) elements.name.value = payload.participant.display_name || "";
   if (elements.publish) elements.publish.checked = Boolean(payload.participant.publish_name);
+  if (elements.publishCompetitive) elements.publishCompetitive.checked = Boolean(payload.participant.publish_competitive_name);
+  applyPublicationLocks(payload.event_finished);
 
   const hasName = updateSurveyAccess(payload.participant.display_name);
   setParticipantState(hasName ? globalText("saved", "gespeichert") : homeText("participant_need_name", "Bitte Namen eingeben, um die Umfragen zu öffnen."));
@@ -70,6 +87,7 @@ async function saveParticipant() {
     body: JSON.stringify({
       display_name: typedName,
       publish_name: Boolean(elements.publish?.checked),
+      publish_competitive_name: Boolean(elements.publishCompetitive?.checked),
     }),
   });
   const payload = await response.json();
@@ -77,6 +95,8 @@ async function saveParticipant() {
 
   if (elements.name) elements.name.value = payload.participant.display_name || "";
   if (elements.publish) elements.publish.checked = Boolean(payload.participant.publish_name);
+  if (elements.publishCompetitive) elements.publishCompetitive.checked = Boolean(payload.participant.publish_competitive_name);
+  applyPublicationLocks(payload.event_finished);
 
   const hasName = updateSurveyAccess(payload.participant.display_name);
   setParticipantState(hasName ? globalText("saved", "gespeichert") : homeText("participant_need_name", "Bitte Namen eingeben, um die Umfragen zu öffnen."));
@@ -158,8 +178,38 @@ homeApp?.addEventListener("input", (event) => {
 });
 
 homeApp?.addEventListener("change", (event) => {
-  if (event.target?.id !== "participant-publish") return;
+  if (event.target?.id === "export-competitive") {
+    const elements = participantElements();
+    if (event.target.checked && elements.publishCompetitive && !elements.publishCompetitive.checked) {
+      elements.publishCompetitive.checked = true;
+      setParticipantState(globalText("saving", "speichert..."));
+      saveParticipant().catch((error) => {
+        event.target.checked = false;
+        elements.publishCompetitive.checked = false;
+        setParticipantState(error.message, true);
+      });
+    }
+    return;
+  }
+  if (!["participant-publish", "participant-publish-competitive"].includes(event.target?.id)) return;
   scheduleParticipantSave(0);
+});
+
+homeApp?.addEventListener("submit", async (event) => {
+  const form = event.target.closest(".export-panel form");
+  const exportCompetitive = form?.querySelector("#export-competitive");
+  if (!form || !exportCompetitive?.checked) return;
+  event.preventDefault();
+  const elements = participantElements();
+  if (elements.publishCompetitive) elements.publishCompetitive.checked = true;
+  try {
+    await saveParticipant();
+    form.submit();
+  } catch (error) {
+    exportCompetitive.checked = false;
+    if (elements.publishCompetitive && !elements.publishCompetitive.disabled) elements.publishCompetitive.checked = false;
+    setParticipantState(error.message, true);
+  }
 });
 
 homeApp?.addEventListener("keydown", (event) => {
