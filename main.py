@@ -2360,17 +2360,9 @@ def competitive_payload(
         ]
 
     if show_viewer_soulmate:
-        genitive_name = (
-            normalized_viewer_name
-            if normalized_viewer_name.casefold().endswith(("s", "ß", "x", "z"))
-            else f"{normalized_viewer_name}s"
-        )
         viewer_ranking = {
             **participant_ranking_payload(
-                format_text(
-                    ranking_texts.get("viewer_soulmate_title", "des {name_genitive} Seelenverwandte"),
-                    name_genitive=genitive_name,
-                ),
+                ranking_texts.get("viewer_soulmate_title", "deine eigenen Seelenverwandte"),
                 viewer_distance_values,
                 participants,
                 viewer_distance_ranks,
@@ -2392,6 +2384,22 @@ def competitive_payload(
             len(rankings) - 1,
         )
         rankings.insert(host_ranking_index + 1, viewer_ranking)
+
+    ranking_order = {
+        "participant_goat": 1,
+        "participant_bitter": 2,
+        "participant_classification": 3,
+        "participant_spread": 4,
+        "participant_average_overall": 5,
+        "participant_neutral_bias": 6,
+        "participant_comment_count": 7,
+        "participant_comment_length": 8,
+        "participant_host_favorite": 9,
+        "price_accuracy": 10,
+        "participant_oil_group_zero": 11,
+        "participant_viewer_soulmate": 12,
+    }
+    rankings.sort(key=lambda ranking: ranking_order.get(str(ranking.get("key")), 999))
 
     crown_awards: dict[str, dict[str, int]] = {
         participant_id: {"gold": 0, "silver": 0, "bronze": 0}

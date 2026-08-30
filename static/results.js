@@ -1006,7 +1006,7 @@ function renderOilCard(oil, surveys, rankings, options = {}) {
         <div class="oil-meta-row">
           <span>${escapeHtml(oil.type || "Öl")}</span>
           <span>${escapeHtml(realCurrency(oil.actual_price_per_liter_eur))}</span>
-          ${oil.brought_by_name ? `<span>${escapeHtml(oilText("owner_label", "Mitgebracht von"))}: ${escapeHtml(oil.brought_by_name)}</span>` : ""}
+          ${oil.brought_by_name ? `<span>${escapeHtml(oilText("owner_label", "Mitgebracht von"))} ${escapeHtml(oil.brought_by_name)}</span>` : ""}
           <span>${escapeHtml(oil.response_count)} ${escapeHtml(oilText("ratings_suffix", "Wertungen"))}</span>
         </div>
 
@@ -1143,7 +1143,8 @@ function commentIntro(comment) {
   const label = comment.series_label || comment.survey_title || "";
   const normalized = String(label).toLocaleLowerCase("de-DE");
   const article = comment.survey_id === "gesamt" || normalized.includes("erfahrung") ? "zur" : "zum";
-  return `${article} ${label} von ${author}:`;
+  const contextualLabel = article === "zur" && normalized === "volle erfahrung" ? "vollen Erfahrung" : label;
+  return `${article} ${contextualLabel} von ${author}:`;
 }
 
 function findRanking(rankings, titleOrKey) {

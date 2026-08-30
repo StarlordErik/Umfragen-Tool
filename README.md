@@ -26,12 +26,12 @@ Antworten, Probanden, Öle und deren Chiffre-Zuordnungen liegen lokal in `data/u
 python create_snapshot.py
 ```
 
-Das Skript erzeugt standardmäßig `Oliven-Symposium-Momentaufnahme.html`. Diese einzelne Datei enthält den aktuellen Stand aller Probanden, Antworten und Öl-Slots sowie die benötigten Styles und Skripte. Sie kann direkt im Browser geöffnet und ohne laufenden Server verwendet werden.
+Das Skript erzeugt standardmäßig `Oliven-Symposium-Momentaufnahme.html`. Diese einzelne Datei enthält den aktuellen Stand aller Probanden, Antworten und Öl-Slots sowie die benötigten Styles und Skripte. Sie kann direkt im Browser geöffnet und ohne laufenden Server verwendet werden. Daneben entsteht die vertrauliche Datei `Oliven-Symposium-Momentaufnahme-PINs.txt` mit den individuellen vierstelligen PINs. Bereits vorhandene gültige PINs werden bei späteren Neuerstellungen beibehalten.
 
-Im Snapshot gilt die Umfrage immer als beendet und ist schreibgeschützt. Auf der Startseite kann ausschließlich ein bereits vorhandener Proband ausgewählt werden; Namenseingabe, Veröffentlichungs-Checkboxen und der Link zur Konfiguration fehlen. Ein anderes Ziel oder eine andere Datenbank lassen sich angeben mit:
+Im Snapshot gilt die Umfrage immer als beendet und ist schreibgeschützt. Auf der Startseite kann ausschließlich ein bereits vorhandener Proband ausgewählt werden; alle Probanden außer Erik müssen ihre persönliche PIN eingeben. Namenseingabe, Veröffentlichungs-Checkboxen und der Link zur Konfiguration fehlen. Ein anderes Ziel, eine andere PIN-Liste oder eine andere Datenbank lassen sich angeben mit:
 
 ```powershell
-python create_snapshot.py --output archiv/snapshot-2026.html --db data/umfragen.sqlite3
+python create_snapshot.py --output archiv/momentaufnahme-2026.html --pins-output archiv/momentaufnahme-2026-PINs.txt --db data/umfragen.sqlite3
 ```
 
 Die HTML-Datei enthält sämtliche Umfrageangaben im Klartext und sollte daher wie die Datenbank vertraulich behandelt werden. Tokens, IP-Adressen und Browserkennungen werden nicht in den Snapshot übernommen.

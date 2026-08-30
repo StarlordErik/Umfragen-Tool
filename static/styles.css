@@ -1207,7 +1207,10 @@ a {
   .results-command-links .command-detail { grid-row: 2; }
   .results-command-links .command-competitive { grid-row: 3; }
   .results-command-links.oils-links .command-overview,
-  .results-command-links.competitive-links .command-overview { grid-row: 2; }
+  .results-command-links.competitive-links .command-overview {
+    grid-column: 1;
+    grid-row: 2;
+  }
   .results-command-links.competitive-links .command-detail { grid-row: 3; }
 }
 
@@ -1332,7 +1335,7 @@ a {
 .classification-label {
   color: var(--muted);
   font-style: normal;
-  font-weight: 400;
+  font-weight: 720;
 }
 .classification-mark {
   font-style: normal;
@@ -3561,6 +3564,19 @@ a {
 }
 .personal-response-series dt { color: var(--muted); }
 .personal-response-series dd { margin: 0; text-align: right; font-weight: 760; }
+
+.oil-meta-row span + span::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+@media (max-width: 860px) {
+  .results-command-links .ghost-button {
+    width: 100%;
+  }
+}
 
 @media (max-width: 860px) {
   .participant-form,

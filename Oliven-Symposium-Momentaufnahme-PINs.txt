@@ -1,0 +1,15 @@
+VERTRAULICH – PIN-Liste zur Oliven-Symposium-Momentaufnahme
+Probanden-ID	PIN	Name
+71	8159	Annemarie
+76	3426	Clara
+83	7746	Emilie
+67	PIN-frei	Erik
+77	2246	Ferdi
+72	3998	Leandra
+70	7595	Madlen
+68	1139	Martin
+74	1283	Michał
+78	6614	Niels
+73	9872	Niko
+75	3722	Ronia
+69	9286	Yasmin

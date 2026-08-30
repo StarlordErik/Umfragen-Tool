@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,14 @@ SNAPSHOT_HOME_JS = r"""
 (() => {
   const select = document.getElementById("snapshot-participant");
   const state = document.getElementById("participant-state");
+  const pinPanel = document.getElementById("snapshot-pin-panel");
+  const pinInput = document.getElementById("snapshot-pin");
+  const pinButton = document.getElementById("snapshot-pin-submit");
+  const pinError = document.getElementById("snapshot-pin-error");
   const links = [...document.querySelectorAll(".survey-entry-link")];
+  let pendingParticipantId = "";
 
-  function applySelection() {
-    const participantId = parent.snapshotSelectedParticipant();
-    if (select) select.value = participantId;
+  function applyAccess(participantId) {
     const selected = Boolean(participantId);
     for (const link of links) {
       link.classList.toggle("locked-link", !selected);
@@ -35,9 +39,62 @@ SNAPSHOT_HOME_JS = r"""
     }
   }
 
-  select?.addEventListener("change", () => {
-    parent.snapshotSetParticipant(select.value);
-    applySelection();
+  function hidePinPanel() {
+    pendingParticipantId = "";
+    if (pinPanel) pinPanel.hidden = true;
+    if (pinInput) pinInput.value = "";
+    if (pinError) pinError.textContent = "";
+  }
+
+  function selectParticipant(participantId) {
+    const candidate = String(participantId || "");
+    if (!candidate) {
+      parent.snapshotSetParticipant("");
+      hidePinPanel();
+      applyAccess("");
+      return;
+    }
+    if (!parent.snapshotParticipantNeedsPin(candidate)) {
+      parent.snapshotSetParticipant(candidate);
+      hidePinPanel();
+      applyAccess(candidate);
+      return;
+    }
+    pendingParticipantId = candidate;
+    parent.snapshotSetParticipant("");
+    if (pinPanel) pinPanel.hidden = false;
+    if (pinError) pinError.textContent = "";
+    if (state) state.textContent = "Bitte die persönliche 4-stellige PIN eingeben.";
+    applyAccess("");
+    if (select) select.value = candidate;
+    pinInput?.focus();
+  }
+
+  function submitPin() {
+    const pin = String(pinInput?.value || "").trim();
+    if (!pendingParticipantId || !parent.snapshotVerifyParticipantPin(pendingParticipantId, pin)) {
+      if (pinError) pinError.textContent = "PIN ist falsch.";
+      pinInput?.focus();
+      pinInput?.select();
+      return;
+    }
+    parent.snapshotSetParticipant(pendingParticipantId);
+    const selectedId = pendingParticipantId;
+    hidePinPanel();
+    if (select) select.value = selectedId;
+    applyAccess(selectedId);
+  }
+
+  select?.addEventListener("change", () => selectParticipant(select.value));
+  pinButton?.addEventListener("click", submitPin);
+  pinInput?.addEventListener("input", () => {
+    pinInput.value = pinInput.value.replace(/\D/g, "").slice(0, 4);
+    if (pinError) pinError.textContent = "";
+  });
+  pinInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    submitPin();
   });
 
   document.addEventListener("click", (event) => {
@@ -48,7 +105,9 @@ SNAPSHOT_HOME_JS = r"""
     select?.focus();
   });
 
-  applySelection();
+  const selectedParticipantId = parent.snapshotSelectedParticipant();
+  if (select) select.value = selectedParticipantId;
+  applyAccess(selectedParticipantId);
 })();
 """
 
@@ -80,6 +139,64 @@ FRAME_BRIDGE_JS = r"""
 
 def json_for_html(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
+
+def pin_digest(value: str) -> str:
+    digest = 2_166_136_261
+    for byte in value.encode("ascii"):
+        digest ^= byte
+        digest = (digest * 16_777_619) & 0xFFFFFFFF
+    return f"{digest:08x}"
+
+
+def load_existing_pins(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    result: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) < 2:
+            continue
+        participant_id, pin = parts[0].strip(), parts[1].strip()
+        if participant_id.isdigit() and len(pin) == 4 and pin.isdigit():
+            result[participant_id] = pin
+    return result
+
+
+def participant_pins(participants: list[dict[str, Any]], pins_path: Path) -> dict[str, str]:
+    existing = load_existing_pins(pins_path)
+    assignments: dict[str, str] = {}
+    used: set[str] = set()
+    protected = [
+        participant
+        for participant in participants
+        if str(participant.get("display_name") or "").strip().casefold() != "erik"
+    ]
+    if len(protected) > 10_000:
+        raise ValueError("Für mehr als 10.000 Probanden reichen vierstellige PINs nicht aus.")
+    for participant in protected:
+        participant_id = str(participant["id"])
+        pin = existing.get(participant_id, "")
+        if len(pin) != 4 or not pin.isdigit() or pin in used:
+            pin = ""
+            while not pin or pin in used:
+                pin = f"{secrets.randbelow(10_000):04d}"
+        assignments[participant_id] = pin
+        used.add(pin)
+    return assignments
+
+
+def write_pin_list(path: Path, participants: list[dict[str, Any]], assignments: dict[str, str]) -> None:
+    lines = [
+        "VERTRAULICH – PIN-Liste zur Oliven-Symposium-Momentaufnahme",
+        "Probanden-ID\tPIN\tName",
+    ]
+    for participant in participants:
+        participant_id = str(participant["id"])
+        name = str(participant.get("display_name") or "")
+        lines.append(f"{participant_id}\t{assignments.get(participant_id, 'PIN-frei')}\t{name}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def respondent_from_row(row: Any) -> survey_app.Respondent:
@@ -186,6 +303,12 @@ def home_page(config: dict[str, Any], runtime: dict[str, Any], participants: lis
                 <option value="">Bitte auswählen</option>
                 {participant_options}
               </select>
+              <div id="snapshot-pin-panel" class="snapshot-pin-panel" hidden>
+                <label for="snapshot-pin">Persönliche 4-stellige PIN</label>
+                <input id="snapshot-pin" type="password" inputmode="numeric" pattern="[0-9]{{4}}" maxlength="4" autocomplete="one-time-code">
+                <button id="snapshot-pin-submit" class="save-button" type="button">Proband auswählen</button>
+                <p id="snapshot-pin-error" class="notice error" aria-live="polite"></p>
+              </div>
             </div>
             <p class="notice" id="participant-state"></p>
           </section>
@@ -337,16 +460,14 @@ def render_snapshot(payload: dict[str, Any]) -> str:
   <script>
     const SNAPSHOT = JSON.parse(document.getElementById("snapshot-data").textContent);
     const frame = document.getElementById("snapshot-frame");
-    const storageKey = "oil_tasting_snapshot_participant";
     let memoryParticipant = "";
 
     function storedParticipant() {{
-      try {{ return window.localStorage.getItem(storageKey) || ""; }} catch {{ return memoryParticipant; }}
+      return memoryParticipant;
     }}
 
     function writeParticipant(value) {{
       memoryParticipant = value;
-      try {{ window.localStorage.setItem(storageKey, value); }} catch {{ /* Datei darf ohne Speicherrecht laufen. */ }}
     }}
 
     function validParticipant(value) {{
@@ -356,6 +477,25 @@ def render_snapshot(payload: dict[str, Any]) -> str:
 
     window.snapshotSelectedParticipant = () => validParticipant(storedParticipant());
     window.snapshotSetParticipant = (value) => writeParticipant(validParticipant(value));
+
+    function snapshotPinDigest(value) {{
+      let digest = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {{
+        digest ^= value.charCodeAt(index);
+        digest = Math.imul(digest, 16777619) >>> 0;
+      }}
+      return digest.toString(16).padStart(8, "0");
+    }}
+
+    window.snapshotParticipantNeedsPin = (participantId) => Boolean(SNAPSHOT.pin_gate?.hashes?.[String(participantId)]);
+    window.snapshotVerifyParticipantPin = (participantId, pin) => {{
+      const normalizedId = validParticipant(participantId);
+      const normalizedPin = String(pin || "");
+      if (!normalizedId || !/^\\d{{4}}$/.test(normalizedPin)) return false;
+      const expected = SNAPSHOT.pin_gate?.hashes?.[normalizedId];
+      if (!expected) return true;
+      return snapshotPinDigest(`${{SNAPSHOT.pin_gate.salt}}:${{normalizedId}}:${{normalizedPin}}`) === expected;
+    }};
 
     window.snapshotApi = (rawUrl, options = {{}}) => {{
       const url = new URL(rawUrl, "https://snapshot.invalid");
@@ -412,7 +552,7 @@ def render_snapshot(payload: dict[str, Any]) -> str:
       return '<!doctype html><html lang="de"><head><meta charset="utf-8">' +
         '<meta name="viewport" content="width=device-width,initial-scale=1">' +
         '<meta name="theme-color" content="#121417"><title>' + page.title.replaceAll('<', '&lt;') + '</title>' +
-        '<style>' + SNAPSHOT.assets.styles + '\\n.snapshot-participant-form select{{width:100%;min-height:46px;margin-top:8px}}</style></head><body>' +
+        '<style>' + SNAPSHOT.assets.styles + '\\n.snapshot-participant-form select{{width:100%;min-height:46px;margin-top:8px}}.snapshot-pin-panel{{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px}}.snapshot-pin-panel[hidden]{{display:none}}.snapshot-pin-panel label{{grid-column:1/-1}}.snapshot-pin-panel input{{width:100%;min-height:46px;font-size:1.1rem;letter-spacing:.25em;text-align:center}}.snapshot-pin-panel .notice{{grid-column:1/-1;margin:0}}@media(max-width:600px){{.snapshot-pin-panel{{grid-template-columns:1fr}}.snapshot-pin-panel .save-button{{width:100%}}}}</style></head><body>' +
         page.body + '<script>' + safeScript(setup) + '<\\/script>' +
         '<script>' + safeScript(SNAPSHOT.assets.bridge_js) + '<\\/script>' +
         '<script>' + safeScript(application) + '<\\/script></body></html>';
@@ -449,16 +589,29 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Erzeugt eine eigenständige, schreibgeschützte HTML-Momentaufnahme.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help=f"Zieldatei (Standard: {DEFAULT_OUTPUT.name})")
     parser.add_argument("--db", type=Path, default=survey_app.DB_PATH, help="Zu sichernde SQLite-Datenbank")
+    parser.add_argument("--pins-output", type=Path, help="Zieldatei der vertraulichen PIN-Liste")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    payload = build_snapshot_payload(args.db)
     output = args.output.resolve()
+    pins_output = (args.pins_output or output.with_name(f"{output.stem}-PINs.txt")).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_snapshot_payload(args.db)
+    assignments = participant_pins(payload["participants"], pins_output)
+    pin_salt = secrets.token_hex(16)
+    payload["pin_gate"] = {
+        "salt": pin_salt,
+        "hashes": {
+            participant_id: pin_digest(f"{pin_salt}:{participant_id}:{pin}")
+            for participant_id, pin in assignments.items()
+        },
+    }
     output.write_text(render_snapshot(payload), encoding="utf-8")
+    write_pin_list(pins_output, payload["participants"], assignments)
     print(f"Snapshot erstellt: {output}")
+    print(f"Vertrauliche PIN-Liste: {pins_output}")
     print(f"Probanden: {len(payload['archive']['respondents'])}, Öle/Slots: {len(payload['archive']['oils'])}")
 
 
