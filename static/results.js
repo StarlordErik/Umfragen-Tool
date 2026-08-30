@@ -4,7 +4,6 @@ const pageRoutes = {
   rankings: "/ergebnisse",
   oils: "/einzelne-oel-wertungen",
   competitive: "/kompetitive-verkostung",
-  export: "/ergebnisse",
 };
 const pageRoute = pageRoutes[mode] || "/ergebnisse";
 const revealedOils = new Set();
@@ -181,20 +180,19 @@ const signedNumber = (value) => {
   const sign = numeric >= 0 ? "+" : "-";
   return `${sign}${Math.abs(numeric).toFixed(2).replace(".", ",")}`;
 };
+function formatPersonalAnswer(answer) {
+  const value = answer?.value;
+  if (value === null || value === undefined || value === "") return globalText("open_value", "offen");
+  if (typeof value === "number") return Number(value).toFixed(2).replace(/,00$|\.00$/, "").replace(".", ",");
+  return String(value);
+}
 const rank = (value) => (value ? `${resultsText("rank_prefix", "Platz")} ${value}` : resultsText("rank_missing", "ohne Rang"));
 const isMobileView = () => window.matchMedia("(max-width: 860px)").matches;
 const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselung je Öl" : mode === "competitive" ? "Symposium-Minispiel" : "Ergebnisse");
 const pageEyebrow = () => routeText("eyebrow", mode === "oils" ? "detaillierte Ergebnisse" : mode === "competitive" ? "Auswertung nach Probanden" : "Live-Auswertung");
 
 async function loadResults() {
-  if (mode === "export" && window.EXPORT_PAYLOAD?.ok) {
-    state.payload = window.EXPORT_PAYLOAD;
-    prepareExportState(state.payload);
-    renderExport(state.payload);
-    document.documentElement.dataset.exportReady = "true";
-    return;
-  }
-  const apiAccess = mode === "export" ? "export" : loginContext.apiAccess;
+  const apiAccess = loginContext.apiAccess;
   const response = await fetch(`/api/results?access=${encodeURIComponent(apiAccess)}&password=${encodeURIComponent(state.password)}`, { credentials: "same-origin" });
   const payload = await response.json();
   if (!payload.ok) {
@@ -205,11 +203,6 @@ async function loadResults() {
   }
 
   state.payload = payload;
-  if (mode === "export") {
-    prepareExportState(payload);
-    renderExport(payload);
-    return;
-  }
   if (mode === "competitive" && (state.selectingCompetitiveOil || state.rotatingTasteSpace)) {
     updateTasteSpace();
     return;
@@ -270,7 +263,6 @@ function render(payload) {
         <p class="eyebrow">${escapeHtml(pageEyebrow())}</p>
         <h1>${escapeHtml(pageHeading())}</h1>
       </div>
-      ${["rankings", "oils", "competitive"].includes(mode) ? "" : `<div class="topbar-actions results-actions"><a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a></div>`}
     </section>
 
     ${renderResultsCommands(summary)}
@@ -329,78 +321,6 @@ function syncRankingCardHeights() {
   const height = Math.max(...headers.map((header) => Math.ceil(header.scrollHeight)));
   app.style.setProperty("--ranking-header-height", `${height}px`);
 }
-
-function prepareExportState(payload) {
-  state.allRankingsExpanded = true;
-  for (const ranking of payload.rankings || []) {
-    const id = `global-${ranking.key}`;
-    openRankings.add(id);
-    expandedRankings.add(id);
-  }
-  for (const ranking of payload.competitive?.rankings || []) {
-    const id = `competitive-${ranking.key}`;
-    openRankings.add(id);
-    expandedRankings.add(id);
-  }
-  const coordinateOils = (payload.competitive?.coordinate_oils || []).filter((oil) => (oil.points || []).length);
-  const overallOrder = new Map((findRanking(payload.rankings || [], "overall_all")?.items || []).map((item, index) => [item.oil_id, index]));
-  const owned = coordinateOils.filter((oil) => String(oil.brought_by_respondent_id || "") === String(payload.viewer_id || window.EXPORT_OPTIONS?.viewer_id || ""));
-  const candidates = owned.length ? owned : coordinateOils;
-  candidates.sort((left, right) => (overallOrder.get(left.oil_id) ?? 999) - (overallOrder.get(right.oil_id) ?? 999));
-  const selected = candidates[0];
-  state.competitiveOilIndex = Math.max(0, coordinateOils.findIndex((oil) => oil.oil_id === selected?.oil_id));
-}
-
-function renderExport(payload) {
-  const options = window.EXPORT_OPTIONS || {};
-  const oilIds = new Set(options.oil_ids || []);
-  const selectedOils = (payload.oils || []).filter((oil) => oilIds.has(oil.id));
-  const personalByOil = new Map((payload.personal_responses || []).map((entry) => [entry.oil_id, entry]));
-  app.classList.add("pdf-export-page");
-  app.innerHTML = `
-    <section class="export-cover"><p class="eyebrow">${escapeHtml(resultsText("eyebrow", "Ergebnisse"))}</p><h1>${escapeHtml(resultsText("heading", "Ergebnisse"))}</h1></section>
-    <section class="export-general">${renderOverallChart(payload)}${renderPriceScatterChart(payload)}<div class="ranking-grid">${(payload.rankings || []).map((ranking) => renderRankingCard(ranking, `global-${ranking.key}`)).join("")}</div></section>
-    ${selectedOils.map((oil) => `<section class="export-oil-page">${renderOilCard(oil, payload.config.surveys, payload.rankings, { forceOpen: true, staticHeader: true, hideToggleIcon: true, hideCipherShield: true })}${renderPersonalResponses(personalByOil.get(oil.id))}</section>`).join("")}
-    ${options.competitive ? `<section class="export-competitive"><h2>${escapeHtml(text(["/kompetitive-verkostung", "heading"], "Symposium-Minispiel"))}</h2>${renderTasteSpace(payload.competitive || {})}${renderCrownChart(payload.competitive || {})}<div class="ranking-grid compact">${(payload.competitive?.rankings || []).map((ranking) => renderRankingCard(ranking, `competitive-${ranking.key}`)).join("")}</div></section>` : ""}
-  `;
-  for (const details of app.querySelectorAll("details")) details.open = true;
-}
-
-function renderPersonalResponses(entry) {
-  if (!entry?.surveys?.length) {
-    return `<article class="personal-response-card"><h3>${escapeHtml(resultsText("personal_answers_title", "Eigene Umfrage-Angaben"))}</h3><p class="notice">${escapeHtml(resultsText("personal_answers_empty", "Für dieses Öl wurden keine eigenen Angaben gespeichert."))}</p></article>`;
-  }
-  return `
-    <article class="personal-response-card">
-      <h3>${escapeHtml(resultsText("personal_answers_title", "Eigene Umfrage-Angaben"))}</h3>
-      <div class="personal-response-series">
-        ${entry.surveys.map((survey) => `<section><h4>${escapeHtml(survey.title)}</h4><dl>${(survey.answers || []).map((answer) => `<div><dt>${escapeHtml(answer.label)}</dt><dd>${escapeHtml(formatPersonalAnswer(answer))}</dd></div>`).join("")}</dl></section>`).join("")}
-      </div>
-    </article>`;
-}
-
-function formatPersonalAnswer(answer) {
-  const value = answer?.value;
-  if (value === null || value === undefined || value === "") return globalText("open_value", "offen");
-  if (typeof value === "number") return Number(value).toFixed(2).replace(/,00$|\.00$/, "").replace(".", ",");
-  return String(value);
-}
-
-function fitExportComments() {
-  if (mode !== "export") return;
-  for (const page of app.querySelectorAll(".export-oil-page")) {
-    const comments = page.querySelector(".comment-scroll");
-    if (!comments) continue;
-    let size = 8;
-    comments.style.fontSize = `${size}pt`;
-    while (page.scrollHeight > page.clientHeight + 1 && size > 4.5) {
-      size -= 0.25;
-      comments.style.fontSize = `${size}pt`;
-    }
-  }
-}
-
-window.addEventListener("beforeprint", fitExportComments);
 
 function renderRankingSection(payload) {
   const forceExpanded = state.allRankingsExpanded && !isMobileView();
@@ -549,7 +469,6 @@ function renderPriceScatterChart(payload) {
           <p class="metric-sub">${escapeHtml(resultsText("price_scatter_subtitle", "Punkte über der Linie wurden höher geschätzt als der reale Preis."))}</p>
         </div>
         <div class="price-scatter-legend">
-          ${points.map((point, index) => `<span><i style="--legend-color:${escapeHtml(pointColor(index))}"></i>${escapeHtml(shortOilLabel(point.name))}</span>`).join("")}
           <span><i class="reference"></i>${escapeHtml(resultsText("price_scatter_reference_label", "100%-Linie"))}</span>
         </div>
       </div>
@@ -712,9 +631,9 @@ function renderCrownChart(competitive) {
 
 function renderCrownLegend() {
   return `<div class="crown-chart-legend">
-    <span>${renderCrownIcons({ gold: 1 }, true)}<b>: 3</b></span>
-    <span>${renderCrownIcons({ silver: 1 }, true)}<b>: 2</b></span>
-    <span>${renderCrownIcons({ bronze: 1 }, true)}<b>: 1</b></span>
+    <span>${renderCrownIcons({ gold: 1 }, true)}<b>: 3 Punkte</b></span>
+    <span>${renderCrownIcons({ silver: 1 }, true)}<b>: 2 Punkte</b></span>
+    <span>${renderCrownIcons({ bronze: 1 }, true)}<b>: 1 Punkt</b></span>
     <span>${renderCrownIcons({ blue: 1 }, true)}<b>: ${escapeHtml(routeText("participation_crown_label", "Mitmach-Krone"))}</b></span>
   </div>`;
 }
@@ -731,6 +650,7 @@ function renderTasteSpace(competitive) {
     return `
       <article class="metric-card taste-space-card empty-chart">
         <h2>${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}</h2>
+        <p class="metric-sub">${escapeHtml(routeText("space_subtitle", "Aus den drei Wertungen je Öl und Proband entstehen folgende Punkte in einem dreidimensionalen Koordinatensystem!"))}</p>
         <p class="notice">${escapeHtml(routeText("space_empty", "Noch keine vollständigen Wertungen für das Koordinatensystem."))}</p>
       </article>
     `;
@@ -746,7 +666,8 @@ function renderTasteSpace(competitive) {
       <div class="taste-space-heading">
         <div>
           <h2>${escapeHtml(routeText("space_title", "3D-Gesamteindruck je Öl"))}</h2>
-          <p class="metric-sub">${escapeHtml(oilLabel)}</p>
+          <p class="metric-sub">${escapeHtml(routeText("space_subtitle", "Aus den drei Wertungen je Öl und Proband entstehen folgende Punkte in einem dreidimensionalen Koordinatensystem!"))}</p>
+          <p class="metric-sub taste-space-oil-label">${escapeHtml(oilLabel)}</p>
         </div>
         <div class="taste-space-slider range-widget">
           <div class="range-control simple-range-control" style="--range-pos:${escapeHtml(sliderPos.toFixed(2))}%">
@@ -775,7 +696,7 @@ function selectedCompetitiveOil() {
 
 function tasteSpaceOilLabel(oil) {
   if (!oil?.brought_by_name) return oil?.name || "";
-  return `${oil.name} · ${oilText("owner_label", "Mitgebracht von")}: ${oil.brought_by_name}`;
+  return `${oil.name} · ${oilText("owner_label", "Mitgebracht von")} ${oil.brought_by_name}`;
 }
 
 function scheduleTasteSpaceUpdate() {
@@ -792,7 +713,7 @@ function updateTasteSpace() {
 
   const card = app.querySelector(".taste-space-card");
   const plot = card?.querySelector(".taste-space-plot");
-  const title = card?.querySelector(".taste-space-heading .metric-sub");
+  const title = card?.querySelector(".taste-space-oil-label");
   if (title) title.textContent = tasteSpaceOilLabel(oil);
   if (plot) plot.innerHTML = renderTasteSpaceSvg(oil.points || []);
 
@@ -1466,7 +1387,6 @@ loadResults().catch((error) => {
 });
 
 setInterval(() => {
-  if (mode === "export") return;
   if (state.selectingCompetitiveOil || state.rotatingTasteSpace) return;
   if (state.password) loadResults().catch(() => undefined);
 }, 2000);

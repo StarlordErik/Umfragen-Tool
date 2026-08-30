@@ -1126,19 +1126,6 @@ a {
   color: #cd7f32;
 }
 
-.export-panel > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  list-style: none;
-}
-
-.export-panel > summary::-webkit-details-marker { display: none; }
-.export-panel > summary .details-indicator { font-size: 1.4rem; font-weight: 850; }
-.export-panel > summary .details-indicator::before { content: "+"; }
-.export-panel[open] > summary .details-indicator::before { content: "−"; }
-
 .results-command-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -2915,44 +2902,8 @@ a {
 .oil-row-olive-option { align-self: end; min-height: 42px; }
 .combined-action-zone { margin-top: 18px; }
 
-.export-panel { margin-top: 14px; }
-.export-panel > summary { cursor: pointer; font-size: 1.05rem; font-weight: 850; }
-.export-panel form { display: grid; gap: 12px; margin-top: 14px; }
-.export-oil-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
 .finished-oil-name { min-width: 0; color: var(--muted); font-weight: 760; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sample-tab:not(.open) .finished-oil-name { display: none; }
-
-@media print {
-  @page { size: A4 portrait; margin: 10mm; }
-  :root { color-scheme: light; --bg: #fff; --panel: #fff; --ink: #111827; --muted: #536170; --line: #d6dce3; }
-  body { background: #fff !important; color: #111827 !important; font-size: 9pt; }
-  .pdf-export-page { width: auto; max-width: none; margin: 0; padding: 0; }
-  .pdf-export-page a,
-  .pdf-export-page button,
-  .pdf-export-page .ranking-toggle,
-  .pdf-export-page .cipher-shield,
-  .pdf-export-page .ranking-card-icon,
-  .pdf-export-page .taste-space-slider { display: none !important; }
-  .export-cover { margin-bottom: 6mm; }
-  .export-general .ranking-grid,
-  .export-competitive .ranking-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3mm; }
-  .pdf-export-page .metric-card,
-  .pdf-export-page .oil-card { break-inside: avoid; box-shadow: none; }
-  .pdf-export-page .ranking-card-body,
-  .pdf-export-page .oil-card-body { display: flex !important; }
-  .pdf-export-page .ranking-card-toggle .metric-sub { min-height: 3.9em; }
-  .pdf-export-page .ranking-card li { min-height: 10mm; }
-  .export-oil-page { break-before: page; height: 277mm; overflow: hidden; }
-  .export-oil-page .oil-card { height: 100%; }
-  .export-oil-page .oil-card-body { height: calc(100% - 58px); }
-  .export-oil-page .comment-panel { min-height: 120mm; }
-  .export-oil-page .comment-scroll { min-height: 0; max-height: none; overflow: visible; font-size: 8pt; line-height: 1.18; }
-  .export-oil-page .comment-item { padding: 1.2mm 0; }
-  .export-competitive { break-before: page; }
-  .pdf-export-page .taste-space-card { break-inside: avoid; }
-  .pdf-export-page .taste-space-plot { min-height: 105mm; }
-  .pdf-export-page .boxplot-scale em { color: #536170; }
-}
 
 .oil-edit-grid label {
   display: block;
@@ -3361,18 +3312,6 @@ a {
   height: 20px;
 }
 
-.export-panel {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
-.export-panel > summary {
-  cursor: pointer;
-  font-size: 1.05rem;
-  font-weight: 850;
-}
-
 .cipher-value {
   display: grid;
   align-content: start;
@@ -3391,12 +3330,6 @@ a {
   font-size: 0.7rem;
   font-weight: 720;
   line-height: 1.25;
-}
-
-.export-panel form {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
 }
 
 .finished-sample-heading {
@@ -3657,40 +3590,6 @@ a {
   .configuration-group-body.open { display: block; }
   .configuration-column + .configuration-column { margin-top: 12px; }
   .configuration-tools-grid .action-zone { align-items: stretch; flex-direction: column; }
-}
-
-@media print {
-  :root {
-    color-scheme: dark;
-    --bg: #121417;
-    --panel: #1b1f25;
-    --panel-soft: #20352d;
-    --ink: #f3f5f7;
-    --muted: #a9b1bd;
-    --line: #333a44;
-  }
-  html,
-  body { background: var(--bg) !important; color: var(--ink) !important; }
-  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-  .pdf-export-page { width: 100%; }
-  .pdf-export-page .ranking-grid,
-  .pdf-export-page .ranking-grid.compact { grid-template-columns: 1fr !important; }
-  .pdf-export-page .ranking-card-toggle { min-height: auto; }
-  .pdf-export-page .ranking-card.expanded li { height: 66px; min-height: 66px; }
-  .export-oil-page {
-    break-before: page;
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-  }
-  .export-oil-page .oil-card { height: auto; }
-  .export-oil-page .oil-card-body { height: auto; }
-  .export-oil-page .comment-panel { min-height: 0; }
-  .export-oil-page .comment-scroll {
-    max-height: none;
-    overflow: visible;
-  }
-  .personal-response-card { break-inside: auto; }
 }
 
 .range-control input[type="range"]::-webkit-slider-runnable-track {

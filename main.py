@@ -10,8 +10,6 @@ import random
 import re
 import socket
 import sqlite3
-import subprocess
-import tempfile
 import threading
 import uuid
 import webbrowser
@@ -34,8 +32,6 @@ STATIC_DIR = ROOT / "static"
 COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
 UPDATE_LOCK = threading.RLock()
-EXPORT_LOCK = threading.RLock()
-EXPORT_PAGES: dict[str, str] = {}
 DEFAULT_OIL_SLOT_COUNT = 24
 OIL_SELECTION_PASSWORD = "Erik"
 RESULTS_PASSWORD = "lol"
@@ -1589,26 +1585,6 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
     page_title = route_text(texts, "/", "page_title", "Studie des Oliven-Symposiums")
     home_subtitle = route_text(texts, "/", "subtitle", "")
     home_subtitle_html = f'<p class="topbar-subtitle">{html.escape(home_subtitle)}</p>' if home_subtitle else ""
-    finished = event_is_finished()
-    export_oil_options = "".join(
-        f'<label class="check-option"><input type="checkbox" name="oil" value="{html.escape(str(oil["id"]))}" {"checked" if str(oil.get("brought_by_respondent_id") or "") == str(respondent.id) else ""}><span>{html.escape(str(oil.get("name") or ""))}</span></label>'
-        for oil in active_oils(decryption)
-    )
-    export_panel = (
-        f"""
-        <details class="export-panel">
-          <summary><span>{html.escape(route_text(texts, '/', 'export_title', 'Eigene Ergebnisse als PDF exportieren'))}</span><b class="details-indicator" aria-hidden="true"></b></summary>
-          <form action="/ergebnisse-export.pdf" method="get">
-            <label class="check-option"><input id="export-competitive" type="checkbox" name="competitive" value="1" {"checked" if publish_competitive_checked else ""}><span>{html.escape(route_text(texts, '/', 'export_competitive_label', 'Symposium-Minispiel'))}</span></label>
-            <p class="notice">{html.escape(route_text(texts, '/', 'export_notice', 'Wähle Detailseiten und optional das Symposium-Minispiel aus.'))}</p>
-            <div class="export-oil-options">{export_oil_options}</div>
-            <button class="save-button" type="submit" {'disabled' if not respondent.display_name else ''}>{html.escape(route_text(texts, '/', 'export_button', 'PDF exportieren'))}</button>
-          </form>
-        </details>
-        """
-        if finished
-        else ""
-    )
     return page_shell(
         page_title,
         f"""
@@ -1657,7 +1633,6 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
               </label>
             </div>
             <p class="notice" id="participant-state"> </p>
-            {export_panel}
           </section>
 
           <section class="link-grid result-link-grid">
@@ -1710,14 +1685,9 @@ def render_survey_page(survey_id: str, config: dict[str, Any]) -> str:
 def render_results_page(
     config: dict[str, Any],
     mode: str = "rankings",
-    export_options: dict[str, Any] | None = None,
-    export_payload: dict[str, Any] | None = None,
 ) -> str:
     texts = load_texts()
-    if mode == "export":
-        route = "/ergebnisse"
-        fallback_title = "Persönliche Ergebnisse"
-    elif mode == "oils":
+    if mode == "oils":
         route = "/einzelne-oel-wertungen"
         fallback_title = "Aufschlüsselung je Öl"
     elif mode == "competitive":
@@ -1737,58 +1707,9 @@ def render_results_page(
         """,
         f"""
         <script>window.RESULTS_MODE = {json.dumps(mode)};</script>
-        {f'<script>window.EXPORT_OPTIONS = {json.dumps(export_options or {}, ensure_ascii=False)};</script>' if mode == 'export' else ''}
-        {inline_json_script('EXPORT_PAYLOAD', export_payload or {}) if mode == 'export' else ''}
         <script src="/static/results.js" defer></script>
         """,
     )
-
-
-def browser_executable() -> Path:
-    candidates = [
-        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft/Edge/Application/msedge.exe",
-        Path(os.environ.get("PROGRAMFILES", "")) / "Microsoft/Edge/Application/msedge.exe",
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/Edge/Application/msedge.exe",
-        Path(os.environ.get("PROGRAMFILES", "")) / "Google/Chrome/Application/chrome.exe",
-        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google/Chrome/Application/chrome.exe",
-    ]
-    executable = next((candidate for candidate in candidates if candidate.is_file()), None)
-    if executable is None:
-        raise ValueError("Für den PDF-Export wurde keine Chromium- oder Edge-Installation gefunden.")
-    return executable
-
-
-def generate_results_pdf(handler: BaseHTTPRequestHandler, markup: str) -> bytes:
-    token = uuid.uuid4().hex
-    with EXPORT_LOCK:
-        EXPORT_PAGES[token] = markup
-    port = int(handler.server.server_address[1])
-    url = f"http://127.0.0.1:{port}/ergebnisse-export-render/{token}"
-    try:
-        with tempfile.TemporaryDirectory(prefix="umfragen-pdf-") as temp_dir:
-            output_path = Path(temp_dir) / "eigene-ergebnisse.pdf"
-            profile_path = Path(temp_dir) / "browser-profile"
-            command = [
-                str(browser_executable()),
-                "--headless=new",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--run-all-compositor-stages-before-draw",
-                "--virtual-time-budget=6000",
-                "--no-pdf-header-footer",
-                f"--user-data-dir={profile_path}",
-                f"--print-to-pdf={output_path}",
-                url,
-            ]
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
-            if completed.returncode != 0 or not output_path.is_file():
-                detail = (completed.stderr or completed.stdout or "unbekannter Browserfehler").strip()
-                raise ValueError(f"PDF konnte nicht erstellt werden: {detail[:300]}")
-            return output_path.read_bytes()
-    finally:
-        with EXPORT_LOCK:
-            EXPORT_PAGES.pop(token, None)
 
 
 def render_oil_selection_page(config: dict[str, Any]) -> str:
@@ -2143,6 +2064,8 @@ def competitive_payload(
     owner_oil_values: dict[str, list[float]] | None = None,
     neutral_comparisons: dict[str, dict[str, list[float]]] | None = None,
     all_people: dict[str, dict[str, Any]] | None = None,
+    viewer_name: str | None = None,
+    viewer_vectors_by_oil: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     competitive_texts = dict_at(texts, ("/kompetitive-verkostung",))
     ranking_texts = dict_at(competitive_texts, ("rankings",))
@@ -2257,21 +2180,34 @@ def competitive_payload(
         ),
         None,
     )
+    def distances_from(reference_vectors: dict[str, dict[str, float]]) -> tuple[dict[str, list[float]], dict[str, float | None]]:
+        distributions: dict[str, list[float]] = {}
+        values: dict[str, float | None] = {}
+        for participant_id, stats in participants.items():
+            distances: list[float] = []
+            for oil_id, reference_vector in reference_vectors.items():
+                participant_vector = stats["vectors_by_oil"].get(oil_id, {})
+                for survey_id in survey_ids:
+                    if survey_id in reference_vector and survey_id in participant_vector:
+                        distances.append(abs(float(participant_vector[survey_id]) - float(reference_vector[survey_id])))
+            if distances:
+                distributions[participant_id] = distances
+                values[participant_id] = average(distances)
+        return distributions, values
+
     host_distance_distributions: dict[str, list[float]] = {}
     host_distance_values: dict[str, float | None] = {}
     if host_id is not None:
-        host_vectors = participants[host_id]["vectors_by_oil"]
-        for participant_id, stats in participants.items():
-            distances: list[float] = []
-            for oil_id, host_vector in host_vectors.items():
-                participant_vector = stats["vectors_by_oil"].get(oil_id, {})
-                for survey_id in survey_ids:
-                    if survey_id in host_vector and survey_id in participant_vector:
-                        distances.append(abs(float(participant_vector[survey_id]) - float(host_vector[survey_id])))
-            if distances:
-                host_distance_distributions[participant_id] = distances
-                host_distance_values[participant_id] = average(distances)
+        host_distance_distributions, host_distance_values = distances_from(participants[host_id]["vectors_by_oil"])
     host_distance_ranks = rank_map(host_distance_values, reverse=False)
+
+    normalized_viewer_name = str(viewer_name or "").strip()
+    show_viewer_soulmate = bool(normalized_viewer_name) and normalized_viewer_name.casefold() != "erik"
+    viewer_distance_distributions: dict[str, list[float]] = {}
+    viewer_distance_values: dict[str, float | None] = {}
+    if show_viewer_soulmate and viewer_vectors_by_oil:
+        viewer_distance_distributions, viewer_distance_values = distances_from(viewer_vectors_by_oil)
+    viewer_distance_ranks = rank_map(viewer_distance_values, reverse=False)
 
     coordinate_oils = []
     for oil in oils:
@@ -2422,6 +2358,40 @@ def competitive_payload(
                 "crowns": False,
             },
         ]
+
+    if show_viewer_soulmate:
+        genitive_name = (
+            normalized_viewer_name
+            if normalized_viewer_name.casefold().endswith(("s", "ß", "x", "z"))
+            else f"{normalized_viewer_name}s"
+        )
+        viewer_ranking = {
+            **participant_ranking_payload(
+                format_text(
+                    ranking_texts.get("viewer_soulmate_title", "des {name_genitive} Seelenverwandte"),
+                    name_genitive=genitive_name,
+                ),
+                viewer_distance_values,
+                participants,
+                viewer_distance_ranks,
+                "Punkte",
+                format_text(
+                    ranking_texts.get(
+                        "viewer_soulmate_subtitle",
+                        "{name}, du wolltest sicherlich auch deine Seelenverwandten auf diesem Symposium ausfindig machen! :D (Diese Rangliste siehst nur du.)",
+                    ),
+                    name=normalized_viewer_name,
+                ),
+                key="participant_viewer_soulmate",
+                distributions=viewer_distance_distributions,
+            ),
+            "crowns": False,
+        }
+        host_ranking_index = next(
+            (index for index, ranking in enumerate(rankings) if ranking.get("key") == "participant_host_favorite"),
+            len(rankings) - 1,
+        )
+        rankings.insert(host_ranking_index + 1, viewer_ranking)
 
     crown_awards: dict[str, dict[str, int]] = {
         participant_id: {"gold": 0, "silver": 0, "bronze": 0}
@@ -3006,6 +2976,8 @@ def result_payload(
             owner_oil_values={key: value for key, value in owner_oil_values.items() if key not in hidden_competitive_ids},
             neutral_comparisons={key: value for key, value in neutral_comparisons.items() if key not in hidden_competitive_ids},
             all_people=competitive_people,
+            viewer_name=participant_names.get(str(viewer_id)) if viewer_id is not None else None,
+            viewer_vectors_by_oil=(participant_stats.get(str(viewer_id)) or {}).get("vectors_by_oil") if viewer_id is not None else None,
         )
     return payload
 
@@ -3074,46 +3046,6 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_html(self, 200, render_results_page(config, "competitive"))
             return
 
-        if path.startswith("/ergebnisse-export-render/"):
-            token = path.rsplit("/", 1)[-1]
-            with EXPORT_LOCK:
-                markup = EXPORT_PAGES.get(token)
-            if markup is None:
-                error_response(self, 404, "Export nicht gefunden oder abgelaufen.")
-                return
-            send_html(self, 200, markup)
-            return
-
-        if path in {"/ergebnisse-export", "/ergebnisse-export.pdf"}:
-            if not event_is_finished():
-                raise ValueError("Der Export ist erst nach Ende der Umfrage verfügbar.")
-            respondent = get_or_create_respondent(self)
-            if not respondent.display_name:
-                raise ValueError("Bitte zuerst auf der Startseite anmelden.")
-            export_options = {
-                "oil_ids": query.get("oil", []),
-                "competitive": query.get("competitive", [""])[0] == "1",
-                "viewer_id": respondent.id,
-            }
-            decryption = load_decryption(config)
-            export_payload = result_payload(
-                config,
-                decryption,
-                include_competitive=export_options["competitive"],
-                viewer_id=respondent.id,
-            )
-            export_payload["viewer_id"] = respondent.id
-            markup = render_results_page(config, "export", export_options, export_payload)
-            pdf = generate_results_pdf(self, markup)
-            send_bytes(
-                self,
-                200,
-                pdf,
-                "application/pdf",
-                {"Content-Disposition": 'attachment; filename="eigene-ergebnisse.pdf"'},
-            )
-            return
-
         if path == "/oel-auswahl":
             send_html(self, 200, render_oil_selection_page(config))
             return
@@ -3134,13 +3066,8 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
 
         if path == "/api/results":
             access_scope = query.get("access", query.get("mode", ["results"]))[0]
-            include_competitive = access_scope in {"competitive", "export"}
+            include_competitive = access_scope == "competitive"
             viewer = get_or_create_respondent(self)
-            if access_scope == "export":
-                if not event_is_finished():
-                    raise ValueError("Der Export ist erst nach Ende der Umfrage verfügbar.")
-                if not viewer.display_name:
-                    raise ValueError("Bitte zuerst auf der Startseite anmelden.")
             if not event_is_finished():
                 if include_competitive:
                     require_competitive_results_password(query.get("password", [""])[0])
@@ -3153,8 +3080,6 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
                 include_competitive=include_competitive,
                 viewer_id=viewer.id,
             )
-            if access_scope == "export":
-                result["viewer_id"] = viewer.id
             headers = {"Set-Cookie": cookie_header(viewer.token)} if viewer.is_new_cookie else None
             send_json(self, 200, result, headers)
             return

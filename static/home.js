@@ -55,9 +55,6 @@ function updateSurveyAccess(displayName) {
     link.classList.toggle("locked-link", !hasName);
     link.setAttribute("aria-disabled", hasName ? "false" : "true");
   }
-  for (const button of homeApp?.querySelectorAll('.export-panel button[type="submit"]') || []) {
-    button.disabled = !hasName;
-  }
   return hasName;
 }
 
@@ -178,38 +175,8 @@ homeApp?.addEventListener("input", (event) => {
 });
 
 homeApp?.addEventListener("change", (event) => {
-  if (event.target?.id === "export-competitive") {
-    const elements = participantElements();
-    if (event.target.checked && elements.publishCompetitive && !elements.publishCompetitive.checked) {
-      elements.publishCompetitive.checked = true;
-      setParticipantState(globalText("saving", "speichert..."));
-      saveParticipant().catch((error) => {
-        event.target.checked = false;
-        elements.publishCompetitive.checked = false;
-        setParticipantState(error.message, true);
-      });
-    }
-    return;
-  }
   if (!["participant-publish", "participant-publish-competitive"].includes(event.target?.id)) return;
   scheduleParticipantSave(0);
-});
-
-homeApp?.addEventListener("submit", async (event) => {
-  const form = event.target.closest(".export-panel form");
-  const exportCompetitive = form?.querySelector("#export-competitive");
-  if (!form || !exportCompetitive?.checked) return;
-  event.preventDefault();
-  const elements = participantElements();
-  if (elements.publishCompetitive) elements.publishCompetitive.checked = true;
-  try {
-    await saveParticipant();
-    form.submit();
-  } catch (error) {
-    exportCompetitive.checked = false;
-    if (elements.publishCompetitive && !elements.publishCompetitive.disabled) elements.publishCompetitive.checked = false;
-    setParticipantState(error.message, true);
-  }
 });
 
 homeApp?.addEventListener("keydown", (event) => {

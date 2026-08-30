@@ -19,3 +19,19 @@ Wichtige Seiten:
 Antworten, Probanden, Öle und deren Chiffre-Zuordnungen liegen lokal in `data/umfragen.sqlite3`. Probanden werden anonym per Cookie und optional per Name wiedererkannt, sodass sie weiterarbeiten können. Öle und ihre Zuordnung zu Probanden werden über die Öl-Auswahl verwaltet; dafür ist keine Code- oder JSON-Änderung nötig.
 
 `decryption.json` enthält nur noch die verfügbaren Chiffre-Sätze. Aktive Öle und freie Platzhalter sind normale Datenbankeinträge.
+
+## Snapshot erstellen
+
+```powershell
+python create_snapshot.py
+```
+
+Das Skript erzeugt standardmäßig `Oliven-Symposium-Momentaufnahme.html`. Diese einzelne Datei enthält den aktuellen Stand aller Probanden, Antworten und Öl-Slots sowie die benötigten Styles und Skripte. Sie kann direkt im Browser geöffnet und ohne laufenden Server verwendet werden.
+
+Im Snapshot gilt die Umfrage immer als beendet und ist schreibgeschützt. Auf der Startseite kann ausschließlich ein bereits vorhandener Proband ausgewählt werden; Namenseingabe, Veröffentlichungs-Checkboxen und der Link zur Konfiguration fehlen. Ein anderes Ziel oder eine andere Datenbank lassen sich angeben mit:
+
+```powershell
+python create_snapshot.py --output archiv/snapshot-2026.html --db data/umfragen.sqlite3
+```
+
+Die HTML-Datei enthält sämtliche Umfrageangaben im Klartext und sollte daher wie die Datenbank vertraulich behandelt werden. Tokens, IP-Adressen und Browserkennungen werden nicht in den Snapshot übernommen.
