@@ -14,6 +14,8 @@ Wichtige Seiten:
 - `/umfrage/geschmack`, `/umfrage/geruch`, `/umfrage/gesamt` sind die drei mobilen Umfragen.
 - `/ergebnisse` zeigt die geschützten Live-Ranglisten.
 - `/einzelne-oel-wertungen` zeigt die geschützte Aufschlüsselung je Öl mit Chiffren-Auflösung und Spoiler-Schutz.
+- `/individuelle-ergebnisse` zeigt die geschützten Ranglisten ausschließlich aus den Wertungen des angemeldeten Probanden.
+- `/kompetitive-verkostung` zeigt das geschützte Symposium-Minispiel.
 - `/oel-auswahl` verwaltet die aktive Öl-Auswahl nach Passwort-Eingabe.
 
 Antworten, Probanden, Öle und deren Chiffre-Zuordnungen liegen lokal in `data/umfragen.sqlite3`. Probanden werden anonym per Cookie und optional per Name wiedererkannt, sodass sie weiterarbeiten können. Öle und ihre Zuordnung zu Probanden werden über die Öl-Auswahl verwaltet; dafür ist keine Code- oder JSON-Änderung nötig.

@@ -143,10 +143,12 @@
     "tester_count": "Probanden",
     "oil_count": "Öle",
     "response_count": "Einzelwertungen",
+    "first_place": "1. Platz",
     "ranking_heading": "Ranglisten",
     "ranking_subtitle": "Alle Daten und Fakten in etlichen Statistiken! Welches Öl hat wo am besten abgeschnitten?",
     "detail_link": "Aufschlüsselung nach Produkt",
     "competitive_link": "Symposium-Minispiel",
+    "personal_link": "individuelle Ergebnisse",
     "overview_link": "zurück zur Ergebnis-Startseite",
     "show_all": "alle anzeigen",
     "show_top_3": "Top 3 anzeigen",
@@ -184,6 +186,22 @@
       "price_guess_subtitle": "Welches Öl schmeckte am teuersten? Was glaubten unsere Probanden, wie teuer die Probe war?",
       "price_deviation_title": "Abweichung vom Realpreis",
       "price_deviation_subtitle": "Wie stark wurde der Geschmack über-/unterschätzt? Je teurer im Vergleich zur Realität wahrgenommen, desto besser."
+    }
+  },
+  "/individuelle-ergebnisse": {
+    "page_title": "Individuelle Ergebnisse",
+    "heading": "Individuelle Ergebnisse",
+    "eyebrow": "deine persönliche Auswertung aller eigenen Wertungen",
+    "loading": "Individuelle Ergebnisse werden geladen...",
+    "login_lead": "Nach der Verkostung kannst du mit Eriks Passwort hier deine individuellen Ergebnisse einsehen.",
+    "response_count": "eigene Wertungen",
+    "ranking_heading": "Ranglisten",
+    "ranking_subtitle": "Wie schneiden die Öle ausschließlich nach deinen eigenen Wertungen ab?",
+    "rankings": {
+      "own_spread_title": "Streuung",
+      "own_spread_subtitle": "Wie unterschiedlich hast du dasselbe Öl über die drei Testreihen hinweg gewertet? Je gleicher deine Wertungen, desto niedriger die Streuung und besser der Rang.",
+      "price_guess_subtitle": "Welches Öl schmeckte dir am teuersten?",
+      "accuracy_subtitle": "Ist das Olivenöl?"
     }
   },
   "/einzelne-oel-wertungen": {

@@ -352,6 +352,7 @@ def result_pages(config: dict[str, Any]) -> dict[str, dict[str, str]]:
         "rankings": ("/ergebnisse", "Ergebnisse"),
         "oils": ("/einzelne-oel-wertungen", "Aufschlüsselung je Öl"),
         "competitive": ("/kompetitive-verkostung", "Symposium-Minispiel"),
+        "personal": ("/individuelle-ergebnisse", "Individuelle Ergebnisse"),
     }
     pages: dict[str, dict[str, str]] = {}
     for mode, (route, fallback) in definitions.items():
@@ -392,6 +393,7 @@ def build_snapshot_payload(db_path: Path) -> dict[str, Any]:
 
     bootstraps: dict[str, dict[str, Any]] = {}
     results: dict[str, dict[str, Any]] = {}
+    individual_results: dict[str, dict[str, Any]] = {}
     for row in selectable_rows:
         respondent = respondent_from_row(row)
         participant_id = str(respondent.id)
@@ -405,8 +407,20 @@ def build_snapshot_payload(db_path: Path) -> dict[str, Any]:
             include_competitive=True,
             viewer_id=respondent.id,
         )
+        individual_results[participant_id] = survey_app.result_payload(
+            config,
+            decryption,
+            viewer_id=respondent.id,
+            personal_only=True,
+        )
 
     results[""] = survey_app.result_payload(config, decryption, include_competitive=True, viewer_id=None)
+    individual_results[""] = survey_app.result_payload(
+        config,
+        decryption,
+        viewer_id=None,
+        personal_only=True,
+    )
     created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         "snapshot": {
@@ -419,6 +433,7 @@ def build_snapshot_payload(db_path: Path) -> dict[str, Any]:
         "participants": participants,
         "bootstraps": bootstraps,
         "results": results,
+        "individual_results": individual_results,
         "archive": {
             "respondents": archived_respondents,
             "oils": decryption["oils"],
@@ -512,6 +527,9 @@ def render_snapshot(payload: dict[str, Any]) -> str:
         return SNAPSHOT.bootstraps[participantId]?.[surveyId] || {{ ok: false, error: "Bitte zuerst einen Probanden auswählen." }};
       }}
       if (url.pathname === "/api/results") {{
+        if (url.searchParams.get("access") === "personal") {{
+          return SNAPSHOT.individual_results[participantId] || SNAPSHOT.individual_results[""];
+        }}
         return SNAPSHOT.results[participantId] || SNAPSHOT.results[""];
       }}
       return {{ ok: false, error: "Diese Funktion ist im Snapshot nicht verfügbar." }};
@@ -528,6 +546,7 @@ def render_snapshot(payload: dict[str, Any]) -> str:
         "/ergebnisse": "rankings",
         "/einzelne-oel-wertungen": "oils",
         "/kompetitive-verkostung": "competitive",
+        "/individuelle-ergebnisse": "personal",
       }};
       const mode = resultModes[route];
       return mode ? {{ ...SNAPSHOT.pages.results[mode], kind: "results", mode }} : null;

@@ -1135,15 +1135,17 @@ a {
 .results-command-grid > .results-command-links,
 .results-command-grid > .results-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
 .results-command-links .command-competitive { grid-column: 1; grid-row: 1; }
 .results-command-links .command-detail { grid-column: 2; grid-row: 1; }
-.results-command-links .command-home { grid-column: 3; grid-row: 1; }
+.results-command-links .command-personal { grid-column: 3; grid-row: 1; }
+.results-command-links .command-home { grid-column: 4; grid-row: 1; }
 .results-command-links.oils-links .command-overview { grid-column: 2; grid-row: 1; }
 .results-command-links.competitive-links .command-overview { grid-column: 1; grid-row: 1; }
+.results-command-links.personal-links .command-overview { grid-column: 3; grid-row: 1; }
 
 .results-command-links .command-competitive {
   border-color: rgba(163, 118, 214, 0.54);
@@ -1161,6 +1163,12 @@ a {
   border-color: rgba(176, 119, 77, 0.52);
   background: rgba(139, 84, 46, 0.17);
   color: #dfb38e;
+}
+
+.results-command-links .command-personal {
+  border-color: rgba(87, 159, 190, 0.55);
+  background: rgba(55, 123, 151, 0.18);
+  color: #a8d8ec;
 }
 .results-command-grid .metric-card { height: auto; }
 
@@ -1199,19 +1207,25 @@ a {
   .results-command-links .command-home,
   .results-command-links .command-detail,
   .results-command-links .command-overview,
-  .results-command-links .command-competitive {
+  .results-command-links .command-competitive,
+  .results-command-links .command-personal {
     grid-column: 1;
   }
 
   .results-command-links .command-home { grid-row: 1; }
   .results-command-links .command-detail { grid-row: 2; }
   .results-command-links .command-competitive { grid-row: 3; }
+  .results-command-links .command-personal { grid-row: 4; }
   .results-command-links.oils-links .command-overview,
-  .results-command-links.competitive-links .command-overview {
+  .results-command-links.competitive-links .command-overview,
+  .results-command-links.personal-links .command-overview {
     grid-column: 1;
     grid-row: 2;
   }
   .results-command-links.competitive-links .command-detail { grid-row: 3; }
+  .results-command-links.competitive-links .command-personal { grid-row: 4; }
+  .results-command-links.personal-links .command-detail { grid-row: 3; }
+  .results-command-links.personal-links .command-competitive { grid-row: 4; }
 }
 
 .earned-crowns {
@@ -1342,8 +1356,8 @@ a {
   font-size: 0.92rem;
   font-weight: 900;
 }
-.classification-mark.yes { color: #65c98f; }
-.classification-mark.no { color: #e07272; }
+.classification-mark.correct { color: #65c98f; }
+.classification-mark.incorrect { color: #e07272; }
 .classification-mark.missing { color: var(--muted); }
 .classification-separator {
   margin: 0 3px;
@@ -2272,6 +2286,15 @@ a {
   font-size: 2rem;
   line-height: 1;
   font-weight: 850;
+}
+
+.first-place-card {
+  min-width: 0;
+}
+
+.first-place-card .metric-value {
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .metric-sub {

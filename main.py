@@ -1693,6 +1693,9 @@ def render_results_page(
     elif mode == "competitive":
         route = "/kompetitive-verkostung"
         fallback_title = "Symposium-Minispiel"
+    elif mode == "personal":
+        route = "/individuelle-ergebnisse"
+        fallback_title = "Individuelle Ergebnisse"
     else:
         route = "/ergebnisse"
         fallback_title = "Ergebnisse"
@@ -2480,9 +2483,13 @@ def result_payload(
     decryption: dict[str, Any],
     include_competitive: bool = False,
     viewer_id: int | None = None,
+    personal_only: bool = False,
 ) -> dict[str, Any]:
     texts = load_texts()
-    ranking_texts = dict_at(texts, ("/ergebnisse", "rankings"))
+    ranking_texts = {
+        **dict_at(texts, ("/ergebnisse", "rankings")),
+        **(dict_at(texts, ("/individuelle-ergebnisse", "rankings")) if personal_only else {}),
+    }
     no_comment_value = text_at(texts, ("/umfrage/:id", "no_comment_value"), "kein Kommentar").casefold()
     oils = active_oils(decryption)
     oil_order = [oil["id"] for oil in oils]
@@ -2531,6 +2538,19 @@ def result_payload(
         ).fetchall()
         session_count = db.execute("SELECT COUNT(*) AS count FROM respondents").fetchone()["count"]
         named_participants = participant_admin_rows(db)
+    all_tester_ids = {
+        int(row["respondent_id"])
+        for row in response_rows
+        if bool(row["is_participant"])
+        and sample_lookup.get((row["survey_id"], row["cipher"]))
+        and survey_lookup.get(row["survey_id"])
+    }
+    if personal_only:
+        response_rows = [
+            row
+            for row in response_rows
+            if viewer_id is not None and int(row["respondent_id"]) == viewer_id
+        ]
     participant_names = {str(item["id"]): item["display_name"] for item in named_participants}
     competition_people = {
         str(item["id"]): participant_stats_template(item["display_name"])
@@ -2857,6 +2877,28 @@ def result_payload(
             ),
         ]
     )
+    if personal_only:
+        rankings = [ranking for ranking in rankings if ranking.get("key") != "spread"]
+        accuracy_ranking = next(
+            (ranking for ranking in rankings if ranking.get("key") == "guess_accuracy"),
+            None,
+        )
+        if accuracy_ranking is not None:
+            present_oil_ids = {item["oil_id"] for item in accuracy_ranking["items"]}
+            accuracy_ranking["items"].extend(
+                {
+                    "oil_id": oil["id"],
+                    "name": oil["name"],
+                    "value": None,
+                    "rank": None,
+                    "box": None,
+                }
+                for oil in oils
+                if oil["id"] not in present_oil_ids
+            )
+            accuracy_ranking["items"].sort(
+                key=lambda item: (item["rank"] or 999, item["name"].casefold())
+            )
 
     oil_payload = []
     for oil_id in oil_order:
@@ -2939,7 +2981,7 @@ def result_payload(
             "surveys": surveys,
         },
         "summary": {
-            "tester_count": len(tester_ids),
+            "tester_count": len(all_tester_ids),
             "oil_count": len(oils),
             "session_count": session_count,
             "response_count": response_count,
@@ -3054,6 +3096,10 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_html(self, 200, render_results_page(config, "competitive"))
             return
 
+        if path == "/individuelle-ergebnisse":
+            send_html(self, 200, render_results_page(config, "personal"))
+            return
+
         if path == "/oel-auswahl":
             send_html(self, 200, render_oil_selection_page(config))
             return
@@ -3075,6 +3121,7 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
         if path == "/api/results":
             access_scope = query.get("access", query.get("mode", ["results"]))[0]
             include_competitive = access_scope == "competitive"
+            personal_only = access_scope == "personal"
             viewer = get_or_create_respondent(self)
             if not event_is_finished():
                 if include_competitive:
@@ -3087,6 +3134,7 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
                 decryption,
                 include_competitive=include_competitive,
                 viewer_id=viewer.id,
+                personal_only=personal_only,
             )
             headers = {"Set-Cookie": cookie_header(viewer.token)} if viewer.is_new_cookie else None
             send_json(self, 200, result, headers)
