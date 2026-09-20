@@ -12,35 +12,6 @@ const openOils = new Set();
 const openRankings = new Set();
 const expandedRankings = new Set();
 const commentScrollPositions = new Map();
-const loginScope = mode === "competitive" ? "competitive" : "results";
-const loginContexts = {
-  results: {
-    apiAccess: "results",
-    formAction: "/ergebnisse/login",
-    formName: "results-login",
-    passwordId: "results-password",
-    passwordName: "results-password",
-    passwordKey: "oil_tasting_results_password",
-    usernameId: "results-login-realm",
-    usernameName: "results-login-realm",
-    usernameValue: "ergebnisse",
-    autocomplete: "section-results current-password",
-  },
-  competitive: {
-    apiAccess: "competitive",
-    formAction: "/kompetitive-verkostung/login",
-    formName: "competitive-results-login",
-    passwordId: "competitive-results-password",
-    passwordName: "competitive-results-password",
-    passwordKey: "oil_tasting_competitive_results_password",
-    usernameId: "competitive-results-login-realm",
-    usernameName: "competitive-results-login-realm",
-    usernameValue: "kompetitive-verkostung",
-    autocomplete: "section-competitive-results current-password",
-  },
-};
-const loginContext = loginContexts[loginScope];
-const PASSWORD_KEY = loginContext.passwordKey;
 
 const greekSymbols = {
   Alpha: "α",
@@ -97,7 +68,6 @@ const pointColors = [
 ];
 
 const state = {
-  password: window.sessionStorage?.getItem(PASSWORD_KEY) || "",
   payload: null,
   allRankingsExpanded: false,
   competitiveOilIndex: 0,
@@ -193,14 +163,11 @@ const pageHeading = () => routeText("heading", mode === "oils" ? "Aufschlüsselu
 const pageEyebrow = () => routeText("eyebrow", mode === "oils" ? "detaillierte Ergebnisse" : mode === "competitive" ? "Auswertung nach Probanden" : mode === "personal" ? "deine persönliche Auswertung" : "Live-Auswertung");
 
 async function loadResults() {
-  const apiAccess = mode === "personal" ? "personal" : loginContext.apiAccess;
-  const response = await fetch(`/api/results?access=${encodeURIComponent(apiAccess)}&password=${encodeURIComponent(state.password)}`, { credentials: "same-origin" });
+  const apiAccess = mode === "personal" ? "personal" : mode === "competitive" ? "competitive" : "results";
+  const response = await fetch(`/api/results?access=${encodeURIComponent(apiAccess)}`, { credentials: "same-origin" });
   const payload = await response.json();
   if (!payload.ok) {
-    if (state.password) window.sessionStorage?.removeItem(PASSWORD_KEY);
-    state.password = "";
-    renderLogin(payload.error || "Passwort ist falsch.");
-    return;
+    throw new Error(payload.error || routeText("load_failed", "Ergebnisse konnten nicht geladen werden."));
   }
 
   state.payload = payload;
@@ -209,49 +176,6 @@ async function loadResults() {
     return;
   }
   render(payload);
-}
-
-function renderLogin(error = "") {
-  app.innerHTML = `
-    <section class="results-header">
-      <div>
-        <p class="eyebrow">${escapeHtml(pageEyebrow())}</p>
-        <h1>${escapeHtml(pageHeading())}</h1>
-        <p class="lead">${escapeHtml(routeText("login_lead", "Passwort eingeben, um die Ergebnisse zu öffnen."))}</p>
-      </div>
-      <div class="topbar-actions">
-        <a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a>
-      </div>
-    </section>
-
-    <form class="setup-editor oil-login-panel" action="${escapeHtml(loginContext.formAction)}" method="post" data-login-form="${escapeHtml(loginContext.formName)}">
-      <label class="visually-hidden" for="${escapeHtml(loginContext.usernameId)}">
-        Anmeldebereich
-        <input
-          id="${escapeHtml(loginContext.usernameId)}"
-          name="${escapeHtml(loginContext.usernameName)}"
-          type="text"
-          value="${escapeHtml(loginContext.usernameValue)}"
-          autocomplete="username"
-          tabindex="-1"
-        >
-      </label>
-      <label for="${escapeHtml(loginContext.passwordId)}">
-        ${escapeHtml(globalText("password_label", "Passwort"))}
-        <input
-          id="${escapeHtml(loginContext.passwordId)}"
-          name="${escapeHtml(loginContext.passwordName)}"
-          type="password"
-          autocomplete="${escapeHtml(loginContext.autocomplete)}"
-          autofocus
-        >
-      </label>
-      <div class="setup-actions">
-        <p class="notice ${error ? "error" : ""}">${escapeHtml(error || " ")}</p>
-        <button class="save-button" type="button" data-action="login-results">${escapeHtml(globalText("login_button", "Öffnen"))}</button>
-      </div>
-    </form>
-  `;
 }
 
 function render(payload) {
@@ -1315,14 +1239,6 @@ function slugify(value) {
 }
 
 function handleClick(event) {
-  const login = event.target.closest('[data-action="login-results"]');
-  if (login) {
-    state.password = document.getElementById(loginContext.passwordId)?.value || "";
-    window.sessionStorage?.setItem(PASSWORD_KEY, state.password);
-    loadResults().catch((error) => renderLogin(error.message));
-    return;
-  }
-
   const allRankings = event.target.closest('[data-action="toggle-all-rankings"]');
   if (allRankings) {
     state.allRankingsExpanded = !state.allRankingsExpanded;
@@ -1425,18 +1341,6 @@ document.addEventListener("pointerup", () => {
   state.rotatingTasteSpace = false;
 });
 
-app.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && event.target?.id === loginContext.passwordId) {
-    event.preventDefault();
-    app.querySelector('[data-action="login-results"]')?.click();
-  }
-});
-
-app.addEventListener("submit", (event) => {
-  event.preventDefault();
-  event.target.querySelector("[data-action]")?.click();
-});
-
 let lastMobile = isMobileView();
 window.addEventListener("resize", () => {
   const nextMobile = isMobileView();
@@ -1451,5 +1355,5 @@ loadResults().catch((error) => {
 
 setInterval(() => {
   if (state.selectingCompetitiveOil || state.rotatingTasteSpace) return;
-  if (state.password) loadResults().catch(() => undefined);
+  loadResults().catch(() => undefined);
 }, 2000);

@@ -167,11 +167,7 @@ def participant_pins(participants: list[dict[str, Any]], pins_path: Path) -> dic
     existing = load_existing_pins(pins_path)
     assignments: dict[str, str] = {}
     used: set[str] = set()
-    protected = [
-        participant
-        for participant in participants
-        if str(participant.get("display_name") or "").strip().casefold() != "erik"
-    ]
+    protected = list(participants)
     if len(protected) > 10_000:
         raise ValueError("Für mehr als 10.000 Probanden reichen vierstellige PINs nicht aus.")
     for participant in protected:

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
+import hmac
 import json
 import math
 import mimetypes
 import os
 import random
 import re
+import secrets
 import socket
 import sqlite3
 import threading
@@ -29,13 +32,28 @@ CONFIG_PATH = ROOT / "event_config.json"
 DECRYPTION_PATH = ROOT / "decryption.json"
 TEXTS_PATH = ROOT / "ui_texts.json"
 STATIC_DIR = ROOT / "static"
+PINS_PATH = Path(os.environ.get("UMFRAGEN_PINS", str(ROOT / "Oliven-Symposium-Momentaufnahme-PINs.txt")))
 COOKIE_NAME = "oil_tasting_participant"
 DEFAULT_PORT = 8000
 UPDATE_LOCK = threading.RLock()
 DEFAULT_OIL_SLOT_COUNT = 24
 OIL_SELECTION_PASSWORD = "Erik"
-RESULTS_PASSWORD = "lol"
-COMPETITIVE_RESULTS_PASSWORD = "rofl"
+EVENT_MODE_PREPARATION = "preparation"
+EVENT_MODE_EXECUTION = "execution"
+EVENT_MODE_EVALUATION = "evaluation"
+EVENT_MODES = {EVENT_MODE_PREPARATION, EVENT_MODE_EXECUTION, EVENT_MODE_EVALUATION}
+PIN_HASH_ITERATIONS = 160_000
+
+
+class ClosingSQLiteConnection(sqlite3.Connection):
+    """SQLite-Kontextmanager, der nach Commit/Rollback auch wirklich schließt."""
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        try:
+            return bool(super().__exit__(exc_type, exc_value, traceback))
+        finally:
+            self.close()
+
 
 DUMMY_COMMENTS = [
     "frisch und klar im Auftakt",
@@ -154,27 +172,60 @@ class Respondent:
     is_new_cookie: bool
 
 
-def event_is_finished(db: sqlite3.Connection | None = None) -> bool:
+def event_mode(db: sqlite3.Connection | None = None) -> str:
     own_connection = db is None
     connection = db or connect_db()
     try:
-        row = connection.execute("SELECT value FROM event_settings WHERE key = 'finished'").fetchone()
-        return bool(row and str(row["value"]) == "1")
+        row = connection.execute("SELECT value FROM event_settings WHERE key = 'mode'").fetchone()
+        if row and str(row["value"]) in EVENT_MODES:
+            return str(row["value"])
+
+        # Bestehende Datenbanken hatten nur den booleschen Schalter `finished`.
+        legacy = connection.execute("SELECT value FROM event_settings WHERE key = 'finished'").fetchone()
+        if legacy:
+            return EVENT_MODE_EVALUATION if str(legacy["value"]) == "1" else EVENT_MODE_EXECUTION
+        return EVENT_MODE_PREPARATION
     finally:
         if own_connection:
             connection.close()
 
 
-def set_event_finished(finished: bool) -> None:
+def event_is_finished(db: sqlite3.Connection | None = None) -> bool:
+    return event_mode(db) == EVENT_MODE_EVALUATION
+
+
+def set_event_mode(mode: str) -> None:
+    normalized = str(mode or "").strip().lower()
+    if normalized not in EVENT_MODES:
+        raise ValueError("Unbekannter Veranstaltungsmodus.")
     with UPDATE_LOCK, connect_db() as db:
+        db.execute(
+            """
+            INSERT INTO event_settings (key, value, updated_at)
+            VALUES ('mode', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (normalized, now_iso()),
+        )
+        # Der alte Wert bleibt für ältere Snapshots und Werkzeuge synchron.
         db.execute(
             """
             INSERT INTO event_settings (key, value, updated_at)
             VALUES ('finished', ?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
-            ("1" if finished else "0", now_iso()),
+            ("1" if normalized == EVENT_MODE_EVALUATION else "0", now_iso()),
         )
+
+
+def set_event_finished(finished: bool) -> None:
+    """Kompatibilität für ältere Aufrufer des früheren Zwei-Phasen-Schalters."""
+    set_event_mode(EVENT_MODE_EVALUATION if finished else EVENT_MODE_EXECUTION)
+
+
+def require_event_mode(required: str, message: str) -> None:
+    if event_mode() != required:
+        raise ValueError(message)
 
 
 def now_iso() -> str:
@@ -361,21 +412,29 @@ def normalize_oil_row(slot_index: int, oil: dict[str, Any]) -> dict[str, Any]:
         "baseline": bool(oil.get("baseline")),
         "implemented": implemented,
         "brought_by_respondent_id": as_int(oil.get("brought_by_respondent_id")),
+        "submitted_by_respondent_id": as_int(oil.get("submitted_by_respondent_id")),
         "ciphers": dict(oil.get("ciphers") or {}),
     }
 
 
 def load_oils_from_db(db: sqlite3.Connection, config: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = db.execute(
+    rows = db.execute("SELECT * FROM oils ORDER BY slot_index").fetchall()
+    owner_rows = db.execute(
         """
-        SELECT
-            o.*,
-            r.display_name AS brought_by_name
-        FROM oils o
-        LEFT JOIN respondents r ON r.id = o.brought_by_respondent_id
-        ORDER BY o.slot_index
+        SELECT oo.slot_index, oo.respondent_id, r.display_name
+        FROM oil_owners oo
+        JOIN respondents r ON r.id = oo.respondent_id
+        ORDER BY oo.slot_index, oo.position, r.display_name COLLATE NOCASE
         """
     ).fetchall()
+    owners_by_slot: dict[int, list[dict[str, Any]]] = {}
+    for row in owner_rows:
+        owners_by_slot.setdefault(int(row["slot_index"]), []).append(
+            {
+                "id": int(row["respondent_id"]),
+                "display_name": str(row["display_name"] or ""),
+            }
+        )
     cipher_rows = db.execute(
         """
         SELECT slot_index, survey_id, cipher
@@ -389,7 +448,9 @@ def load_oils_from_db(db: sqlite3.Connection, config: dict[str, Any]) -> list[di
 
     oils = []
     for row in rows:
-        owner_id = row["brought_by_respondent_id"]
+        owners = owners_by_slot.get(int(row["slot_index"]), [])
+        owner_id = owners[0]["id"] if owners else row["brought_by_respondent_id"]
+        owner_names = [owner["display_name"] for owner in owners if owner["display_name"]]
         oils.append(
             {
                 "slot_index": int(row["slot_index"]),
@@ -402,7 +463,15 @@ def load_oils_from_db(db: sqlite3.Connection, config: dict[str, Any]) -> list[di
                 "baseline": bool(row["baseline"]),
                 "implemented": bool(row["implemented"]),
                 "brought_by_respondent_id": int(owner_id) if owner_id is not None else None,
-                "brought_by_name": str(row["brought_by_name"] or ""),
+                "brought_by_name": " & ".join(owner_names),
+                "brought_by_names": owner_names,
+                "owner_ids": [owner["id"] for owner in owners],
+                "owners": owners,
+                "submitted_by_respondent_id": (
+                    int(row["submitted_by_respondent_id"])
+                    if "submitted_by_respondent_id" in row.keys() and row["submitted_by_respondent_id"] is not None
+                    else None
+                ),
                 "ciphers": {
                     survey["id"]: ciphers_by_slot.get(int(row["slot_index"]), {}).get(survey["id"], "")
                     for survey in config["surveys"]
@@ -461,6 +530,7 @@ def public_runtime_config(config: dict[str, Any], decryption: dict[str, Any]) ->
         surveys.append(item)
     return {
         "event": config.get("event", {}),
+        "event_mode": event_mode(),
         "event_finished": event_is_finished(),
         "oil_type_options": config.get("oil_type_options", []),
         "surveys": surveys,
@@ -520,6 +590,8 @@ def participant_admin_rows(db: sqlite3.Connection | None = None) -> list[dict[st
                 r.publish_name,
                 r.publish_competitive_name,
                 r.is_participant,
+                r.pin_hash,
+                r.pin_reset_required,
                 COUNT(sr.survey_id) AS response_count
             FROM respondents r
             LEFT JOIN survey_responses sr ON sr.respondent_id = r.id
@@ -528,6 +600,7 @@ def participant_admin_rows(db: sqlite3.Connection | None = None) -> list[dict[st
             ORDER BY r.display_name COLLATE NOCASE
             """
         ).fetchall()
+        default_pins = load_default_pins()
         return [
             {
                 "id": int(row["id"]),
@@ -536,6 +609,7 @@ def participant_admin_rows(db: sqlite3.Connection | None = None) -> list[dict[st
                 "publish_competitive_name": bool(row["publish_competitive_name"]),
                 "is_participant": bool(row["is_participant"]),
                 "response_count": int(row["response_count"] or 0),
+                "pin_status": participant_pin_status(row, default_pins),
             }
             for row in rows
         ]
@@ -565,6 +639,44 @@ def require_existing_participant(db: sqlite3.Connection, participant_id: Any) ->
     return normalized_id
 
 
+def owner_ids_from_payload(payload: dict[str, Any]) -> list[int]:
+    raw_ids = payload.get("owner_ids")
+    if not isinstance(raw_ids, list):
+        raw_ids = [payload.get("brought_by_respondent_id")]
+    owner_ids: list[int] = []
+    for value in raw_ids:
+        normalized = as_int(value)
+        if normalized is not None and normalized not in owner_ids:
+            owner_ids.append(normalized)
+    return owner_ids[:24]
+
+
+def require_existing_participants(db: sqlite3.Connection, participant_ids: list[int]) -> list[int]:
+    validated: list[int] = []
+    for participant_id in participant_ids:
+        existing = require_existing_participant(db, participant_id)
+        if existing is not None:
+            validated.append(existing)
+    return validated
+
+
+def replace_oil_owners(db: sqlite3.Connection, slot_index: int, owner_ids: list[int]) -> None:
+    db.execute("DELETE FROM oil_owners WHERE slot_index = ?", (slot_index,))
+    timestamp = now_iso()
+    for position, participant_id in enumerate(owner_ids):
+        db.execute(
+            """
+            INSERT INTO oil_owners (slot_index, respondent_id, position, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (slot_index, participant_id, position, timestamp),
+        )
+    db.execute(
+        "UPDATE oils SET brought_by_respondent_id = ? WHERE slot_index = ?",
+        (owner_ids[0] if owner_ids else None, slot_index),
+    )
+
+
 def oil_selection_payload(config: dict[str, Any], decryption: dict[str, Any]) -> dict[str, Any]:
     counts = oil_response_counts(config, decryption)
     with connect_db() as db:
@@ -584,6 +696,9 @@ def oil_selection_payload(config: dict[str, Any], decryption: dict[str, Any]) ->
                 "baseline": bool(oil.get("baseline")),
                 "brought_by_respondent_id": oil.get("brought_by_respondent_id"),
                 "brought_by_name": oil.get("brought_by_name", ""),
+                "brought_by_names": oil.get("brought_by_names", []),
+                "owner_ids": oil.get("owner_ids", []),
+                "owners": oil.get("owners", []),
                 "ciphers": oil.get("ciphers", {}),
                 "response_count": count,
                 "can_remove": bool(oil.get("implemented")) and count == 0,
@@ -596,6 +711,7 @@ def oil_selection_payload(config: dict[str, Any], decryption: dict[str, Any]) ->
         "placeholder_count": sum(1 for oil in oils if not oil["implemented"]),
         "oil_type_options": config.get("oil_type_options", []),
         "participants": participants,
+        "event_mode": event_mode(),
         "event_finished": event_is_finished(),
     }
 
@@ -706,12 +822,15 @@ def add_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[st
 
     new_id = unique_oil_id(name, decryption)
     with UPDATE_LOCK, connect_db() as db:
-        owner_id = require_existing_participant(db, payload.get("brought_by_respondent_id"))
+        owner_ids = require_existing_participants(db, owner_ids_from_payload(payload))
+        owner_id = owner_ids[0] if owner_ids else None
+        submitted_by_id = require_existing_participant(db, payload.get("submitted_by_respondent_id"))
         db.execute(
             """
             UPDATE oils
             SET id = ?, name = ?, type = ?, is_olive_oil = ?, actual_price_per_liter_eur = ?,
-                price_source = ?, baseline = 0, implemented = 1, brought_by_respondent_id = ?, updated_at = ?
+                price_source = ?, baseline = 0, implemented = 1, brought_by_respondent_id = ?,
+                submitted_by_respondent_id = ?, updated_at = ?
             WHERE slot_index = ?
             """,
             (
@@ -720,13 +839,40 @@ def add_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[st
                 oil_type,
                 1 if is_olive_oil else 0,
                 price,
-                "Öl-Auswahl",
+                str(payload.get("price_source") or "Öl-Auswahl")[:500],
                 owner_id,
+                submitted_by_id,
                 now_iso(),
                 int(slot["slot_index"]),
             ),
         )
+        replace_oil_owners(db, int(slot["slot_index"]), owner_ids)
     return oil_selection_payload(config, load_decryption(config))
+
+
+def submit_oil_from_home(
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+    respondent: Respondent,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    require_event_mode(
+        EVENT_MODE_PREPARATION,
+        "Öle können nur während der Vorbereitung eingereicht werden.",
+    )
+    if not respondent.display_name:
+        raise ValueError("Bitte zuerst mit Name und PIN anmelden.")
+    submitted = dict(payload)
+    if "owner_ids" not in submitted:
+        submitted["owner_ids"] = [respondent.id]
+    owner_ids = owner_ids_from_payload(submitted)
+    if not owner_ids:
+        raise ValueError("Bitte mindestens eine Person auswählen, von der das Öl ist.")
+    submitted["owner_ids"] = owner_ids
+    submitted["submitted_by_respondent_id"] = respondent.id
+    submitted["price_source"] = f"Einreichung von {respondent.display_name}"
+    add_oil(config, decryption, submitted)
+    return home_state_payload(config, load_decryption(config), respondent)
 
 
 def update_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -742,7 +888,8 @@ def update_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict
         raise ValueError("Öl nicht gefunden.")
 
     with UPDATE_LOCK, connect_db() as db:
-        owner_id = require_existing_participant(db, payload.get("brought_by_respondent_id"))
+        owner_ids = require_existing_participants(db, owner_ids_from_payload(payload))
+        owner_id = owner_ids[0] if owner_ids else None
         db.execute(
             """
             UPDATE oils
@@ -761,6 +908,7 @@ def update_oil(config: dict[str, Any], decryption: dict[str, Any], payload: dict
                 int(oil["slot_index"]),
             ),
         )
+        replace_oil_owners(db, int(oil["slot_index"]), owner_ids)
     return oil_selection_payload(config, load_decryption(config))
 
 
@@ -777,11 +925,13 @@ def remove_oil(config: dict[str, Any], decryption: dict[str, Any], oil_id: str) 
                     UPDATE oils
                     SET id = ?, name = ?, type = 'Platzhalter', is_olive_oil = 0,
                         actual_price_per_liter_eur = NULL, price_source = NULL, baseline = 0,
-                        implemented = 0, brought_by_respondent_id = NULL, updated_at = ?
+                        implemented = 0, brought_by_respondent_id = NULL,
+                        submitted_by_respondent_id = NULL, updated_at = ?
                     WHERE slot_index = ?
                     """,
                     (placeholder_id, f"Platzhalter frei {index + 1:02d}", now_iso(), int(oil["slot_index"])),
                 )
+                replace_oil_owners(db, int(oil["slot_index"]), [])
             return oil_selection_payload(config, load_decryption(config))
     raise ValueError("Öl nicht gefunden.")
 
@@ -959,19 +1109,102 @@ def require_oil_password(value: Any) -> None:
         raise ValueError("Passwort ist falsch.")
 
 
-def require_results_password(value: Any) -> None:
-    if value != RESULTS_PASSWORD:
-        raise ValueError("Passwort ist falsch.")
+def normalize_pin(value: Any) -> str:
+    pin = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}", pin):
+        raise ValueError("Die PIN muss genau vier Ziffern haben.")
+    return pin
 
 
-def require_competitive_results_password(value: Any) -> None:
-    if value != COMPETITIVE_RESULTS_PASSWORD:
-        raise ValueError("Passwort ist falsch.")
+def hash_pin(pin: str, salt: str | None = None) -> str:
+    normalized = normalize_pin(pin)
+    pin_salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        normalized.encode("utf-8"),
+        bytes.fromhex(pin_salt),
+        PIN_HASH_ITERATIONS,
+    ).hex()
+    return f"pbkdf2_sha256${PIN_HASH_ITERATIONS}${pin_salt}${digest}"
+
+
+def verify_pin(pin: str, encoded: str) -> bool:
+    try:
+        algorithm, iterations, salt, expected = str(encoded or "").split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        actual = hashlib.pbkdf2_hmac(
+            "sha256",
+            normalize_pin(pin).encode("utf-8"),
+            bytes.fromhex(salt),
+            int(iterations),
+        ).hex()
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(actual, expected)
+
+
+def load_default_pins(path: Path | None = None) -> dict[str, str]:
+    source = path or PINS_PATH
+    if not source.is_file():
+        return {}
+    result: dict[str, str] = {}
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        parts = line.split("\t", 2)
+        if len(parts) < 2:
+            continue
+        participant_id, pin = parts[0].strip(), parts[1].strip()
+        if participant_id.isdigit() and re.fullmatch(r"\d{4}", pin):
+            result[participant_id] = pin
+    return result
+
+
+def participant_pin_status(row: sqlite3.Row, default_pins: dict[str, str] | None = None) -> str:
+    if str(row["pin_hash"] or ""):
+        return "set"
+    if bool(row["pin_reset_required"]):
+        return "reset"
+    pins = default_pins if default_pins is not None else load_default_pins()
+    return "file" if str(row["id"]) in pins else "setup"
+
+
+def authenticate_or_set_participant_pin(db: sqlite3.Connection, row: sqlite3.Row, value: Any) -> bool:
+    pin = normalize_pin(value)
+    encoded = str(row["pin_hash"] or "")
+    if encoded:
+        if not verify_pin(pin, encoded):
+            raise ValueError("PIN ist falsch.")
+        return False
+
+    if not bool(row["pin_reset_required"]):
+        default_pin = load_default_pins().get(str(row["id"]))
+        if default_pin:
+            if not hmac.compare_digest(pin, default_pin):
+                raise ValueError("PIN ist falsch.")
+            db.execute(
+                "UPDATE respondents SET pin_hash = ?, updated_at = ? WHERE id = ?",
+                (hash_pin(pin), now_iso(), int(row["id"])),
+            )
+            return False
+
+    db.execute(
+        """
+        UPDATE respondents
+        SET pin_hash = ?, pin_reset_required = 0, updated_at = ?
+        WHERE id = ?
+        """,
+        (hash_pin(pin), now_iso(), int(row["id"])),
+    )
+    return True
 
 
 def connect_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, factory=ClosingSQLiteConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA foreign_keys=ON")
@@ -990,6 +1223,8 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
             publish_name INTEGER NOT NULL DEFAULT 1,
             publish_competitive_name INTEGER NOT NULL DEFAULT 1,
             is_participant INTEGER NOT NULL DEFAULT 1,
+            pin_hash TEXT,
+            pin_reset_required INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -1016,9 +1251,21 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
             baseline INTEGER NOT NULL DEFAULT 0,
             implemented INTEGER NOT NULL DEFAULT 0,
             brought_by_respondent_id INTEGER,
+            submitted_by_respondent_id INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            FOREIGN KEY (brought_by_respondent_id) REFERENCES respondents(id) ON DELETE SET NULL
+            FOREIGN KEY (brought_by_respondent_id) REFERENCES respondents(id) ON DELETE SET NULL,
+            FOREIGN KEY (submitted_by_respondent_id) REFERENCES respondents(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS oil_owners (
+            slot_index INTEGER NOT NULL,
+            respondent_id INTEGER NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (slot_index, respondent_id),
+            FOREIGN KEY (slot_index) REFERENCES oils(slot_index) ON DELETE CASCADE,
+            FOREIGN KEY (respondent_id) REFERENCES respondents(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS oil_ciphers (
@@ -1047,6 +1294,9 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_oils_brought_by
             ON oils(brought_by_respondent_id);
+
+        CREATE INDEX IF NOT EXISTS idx_oil_owners_respondent
+            ON oil_owners(respondent_id, slot_index);
         """
     )
     respondent_columns = {row["name"] for row in db.execute("PRAGMA table_info(respondents)").fetchall()}
@@ -1056,10 +1306,27 @@ def ensure_database_schema(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE respondents ADD COLUMN publish_competitive_name INTEGER NOT NULL DEFAULT 1")
     if "is_participant" not in respondent_columns:
         db.execute("ALTER TABLE respondents ADD COLUMN is_participant INTEGER NOT NULL DEFAULT 1")
+    if "pin_hash" not in respondent_columns:
+        db.execute("ALTER TABLE respondents ADD COLUMN pin_hash TEXT")
+    if "pin_reset_required" not in respondent_columns:
+        db.execute("ALTER TABLE respondents ADD COLUMN pin_reset_required INTEGER NOT NULL DEFAULT 0")
 
     oil_columns = {row["name"] for row in db.execute("PRAGMA table_info(oils)").fetchall()}
     if "brought_by_respondent_id" not in oil_columns:
         db.execute("ALTER TABLE oils ADD COLUMN brought_by_respondent_id INTEGER REFERENCES respondents(id) ON DELETE SET NULL")
+    if "submitted_by_respondent_id" not in oil_columns:
+        db.execute("ALTER TABLE oils ADD COLUMN submitted_by_respondent_id INTEGER REFERENCES respondents(id) ON DELETE SET NULL")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_oils_submitted_by ON oils(submitted_by_respondent_id)")
+
+    # Übernimmt die bisherige Einzel-Zuordnung einmalig in die neue n:m-Tabelle.
+    db.execute(
+        """
+        INSERT OR IGNORE INTO oil_owners (slot_index, respondent_id, position, created_at)
+        SELECT slot_index, brought_by_respondent_id, 0, updated_at
+        FROM oils
+        WHERE brought_by_respondent_id IS NOT NULL
+        """
+    )
 
 
 def insert_oil_slot(db: sqlite3.Connection, slot_index: int, oil: dict[str, Any], timestamp: str) -> None:
@@ -1068,9 +1335,10 @@ def insert_oil_slot(db: sqlite3.Connection, slot_index: int, oil: dict[str, Any]
         """
         INSERT INTO oils (
             slot_index, id, name, type, is_olive_oil, actual_price_per_liter_eur,
-            price_source, baseline, implemented, brought_by_respondent_id, created_at, updated_at
+            price_source, baseline, implemented, brought_by_respondent_id, submitted_by_respondent_id,
+            created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             normalized["slot_index"],
@@ -1083,10 +1351,19 @@ def insert_oil_slot(db: sqlite3.Connection, slot_index: int, oil: dict[str, Any]
             1 if normalized["baseline"] else 0,
             1 if normalized["implemented"] else 0,
             normalized["brought_by_respondent_id"],
+            normalized["submitted_by_respondent_id"],
             timestamp,
             timestamp,
         ),
     )
+    if normalized["brought_by_respondent_id"] is not None:
+        db.execute(
+            """
+            INSERT OR IGNORE INTO oil_owners (slot_index, respondent_id, position, created_at)
+            VALUES (?, ?, 0, ?)
+            """,
+            (slot_index, normalized["brought_by_respondent_id"], timestamp),
+        )
     for survey_id, cipher in normalized["ciphers"].items():
         db.execute(
             """
@@ -1165,6 +1442,7 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
                 """
                 SELECT * FROM respondents
                 WHERE ip = ? AND user_agent = ?
+                  AND (display_name IS NULL OR TRIM(display_name) = '')
                 ORDER BY updated_at DESC
                 LIMIT 1
                 """,
@@ -1206,45 +1484,176 @@ def get_or_create_respondent(handler: BaseHTTPRequestHandler) -> Respondent:
 
 
 def participant_payload(respondent: Respondent) -> dict[str, Any]:
+    mode = event_mode()
     return {
         "ok": True,
         "participant": {
+            "id": respondent.id,
             "display_name": respondent.display_name or "",
             "publish_name": respondent.publish_name if respondent.display_name else True,
             "publish_competitive_name": respondent.publish_competitive_name if respondent.display_name else True,
             "is_participant": respondent.is_participant,
+            "authenticated": bool(respondent.display_name),
         },
-        "event_finished": event_is_finished(),
+        "event_mode": mode,
+        "event_finished": mode == EVENT_MODE_EVALUATION,
+        "capabilities": {
+            "submit_oil": bool(respondent.display_name) and mode == EVENT_MODE_PREPARATION,
+            "open_surveys": bool(respondent.display_name) and mode in {EVENT_MODE_EXECUTION, EVENT_MODE_EVALUATION},
+            "edit_surveys": bool(respondent.display_name) and mode == EVENT_MODE_EXECUTION,
+            "open_results": mode == EVENT_MODE_EVALUATION,
+        },
     }
+
+
+def home_submission_payload(
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+    respondent: Respondent,
+) -> list[dict[str, Any]]:
+    if not respondent.display_name:
+        return []
+
+    own_oils = [
+        oil
+        for oil in active_oils(decryption)
+        if respondent.id in {int(owner_id) for owner_id in oil.get("owner_ids", [])}
+        or oil.get("submitted_by_respondent_id") == respondent.id
+    ]
+    values_by_oil: dict[str, dict[str, list[float]]] = {
+        oil["id"]: {str(survey["id"]): [] for survey in config["surveys"]}
+        for oil in own_oils
+    }
+    if event_is_finished() and own_oils:
+        lookup = cipher_to_oil(config, decryption)
+        with connect_db() as db:
+            rows = db.execute("SELECT survey_id, cipher, answers_json FROM survey_responses").fetchall()
+        for row in rows:
+            oil = lookup.get((str(row["survey_id"]), str(row["cipher"])))
+            if not oil or oil["id"] not in values_by_oil:
+                continue
+            try:
+                answers = json.loads(row["answers_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            value = as_float(answers.get("overall")) if isinstance(answers, dict) else None
+            if value is not None:
+                values_by_oil[oil["id"]][str(row["survey_id"])].append(value)
+
+    submissions = []
+    for oil in own_oils:
+        survey_values = values_by_oil[oil["id"]]
+        all_values = [value for values in survey_values.values() for value in values]
+        submissions.append(
+            {
+                "id": oil["id"],
+                "name": oil.get("name", ""),
+                "type": oil.get("type", ""),
+                "actual_price_per_liter_eur": oil.get("actual_price_per_liter_eur"),
+                "owners": oil.get("owners", []),
+                "brought_by_name": oil.get("brought_by_name", ""),
+                "overall": {
+                    "all": {"avg": average(all_values)},
+                    "by_survey": {
+                        survey_id: {"avg": average(values)}
+                        for survey_id, values in survey_values.items()
+                    },
+                }
+                if event_is_finished()
+                else None,
+            }
+        )
+    return sorted(submissions, key=lambda item: str(item["name"]).casefold())
+
+
+def home_state_payload(
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+    respondent: Respondent,
+) -> dict[str, Any]:
+    payload = participant_payload(respondent)
+    participants: list[dict[str, Any]] = []
+    if respondent.display_name:
+        with connect_db() as db:
+            rows = db.execute(
+                """
+                SELECT id, display_name
+                FROM respondents
+                WHERE display_name IS NOT NULL AND TRIM(display_name) != ''
+                ORDER BY display_name COLLATE NOCASE
+                """
+            ).fetchall()
+        participants = [
+            {"id": int(row["id"]), "display_name": str(row["display_name"])}
+            for row in rows
+        ]
+    payload.update(
+        {
+            "participants": participants,
+            "submissions": home_submission_payload(config, decryption, respondent),
+            "submission_capacity": sum(1 for oil in decryption["oils"] if not oil.get("implemented")),
+            "survey_series": [
+                {
+                    "id": str(survey["id"]),
+                    "title": str(survey.get("short_title") or survey.get("title") or survey["id"]),
+                    "accent": str(survey.get("accent") or "#d49b2b"),
+                }
+                for survey in config["surveys"]
+            ],
+        }
+    )
+    return payload
 
 
 def clean_display_name(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:80]
 
 
-def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str] | None]:
+def save_participant(
+    handler: BaseHTTPRequestHandler,
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str] | None]:
     respondent = get_or_create_respondent(handler)
     display_name = clean_display_name(payload.get("display_name"))
+    if not display_name:
+        raise ValueError("Bitte einen Namen eingeben.")
+    pin = normalize_pin(payload.get("pin"))
     publish_name = bool(payload.get("publish_name"))
     publish_competitive_name = bool(payload.get("publish_competitive_name"))
     timestamp = now_iso()
+    pin_was_set = False
 
     with UPDATE_LOCK, connect_db() as db:
+        current = db.execute("SELECT * FROM respondents WHERE id = ?", (respondent.id,)).fetchone()
+        if current is None:
+            raise ValueError("Anmeldung konnte nicht zugeordnet werden.")
         target = None
-        if display_name:
-            target = db.execute(
-                """
-                SELECT * FROM respondents
-                WHERE display_name = ? COLLATE NOCASE AND id != ?
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (display_name, respondent.id),
-            ).fetchone()
+        target = db.execute(
+            """
+            SELECT * FROM respondents
+            WHERE display_name = ? COLLATE NOCASE AND id != ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (display_name, respondent.id),
+        ).fetchone()
 
         target_id = int(target["id"]) if target else respondent.id
         target_token = respondent.token
-        existing_preferences = target or db.execute("SELECT * FROM respondents WHERE id = ?", (target_id,)).fetchone()
+        existing_preferences = target or current
+        if target is not None:
+            pin_was_set = authenticate_or_set_participant_pin(db, target, pin)
+        elif current["display_name"]:
+            pin_was_set = authenticate_or_set_participant_pin(db, current, pin)
+        else:
+            db.execute(
+                "UPDATE respondents SET pin_hash = ?, pin_reset_required = 0 WHERE id = ?",
+                (hash_pin(pin), respondent.id),
+            )
+            pin_was_set = True
+
         if event_is_finished(db) and existing_preferences is not None:
             if bool(existing_preferences["publish_name"]) and not publish_name:
                 raise ValueError("Nach Ende der Umfrage kann der Name bei den Freitextbewertungen nicht mehr anonymisiert werden.")
@@ -1252,44 +1661,68 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
                 raise ValueError("Nach Ende der Umfrage kann die Teilnahme am Symposium-Minispiel nicht mehr zurückgenommen werden.")
 
         if target and target_id != respondent.id:
-            current_rows = db.execute(
-                "SELECT * FROM survey_responses WHERE respondent_id = ?",
-                (respondent.id,),
-            ).fetchall()
-            for current in current_rows:
-                existing = db.execute(
-                    """
-                    SELECT updated_at
-                    FROM survey_responses
-                    WHERE respondent_id = ? AND survey_id = ? AND cipher = ?
-                    """,
-                    (target_id, current["survey_id"], current["cipher"]),
-                ).fetchone()
-                if existing is None or str(current["updated_at"]) >= str(existing["updated_at"]):
-                    db.execute(
+            # Nur anonyme, vor der Anmeldung entstandene Angaben werden in das Zielkonto übernommen.
+            if not current["display_name"]:
+                current_rows = db.execute(
+                    "SELECT * FROM survey_responses WHERE respondent_id = ?",
+                    (respondent.id,),
+                ).fetchall()
+                for current_response in current_rows:
+                    existing = db.execute(
                         """
-                        INSERT INTO survey_responses (
-                            respondent_id, survey_id, cipher, answers_json, created_at, updated_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(respondent_id, survey_id, cipher)
-                        DO UPDATE SET answers_json = excluded.answers_json, updated_at = excluded.updated_at
+                        SELECT updated_at
+                        FROM survey_responses
+                        WHERE respondent_id = ? AND survey_id = ? AND cipher = ?
                         """,
-                        (
-                            target_id,
-                            current["survey_id"],
-                            current["cipher"],
-                            current["answers_json"],
-                            current["created_at"],
-                            current["updated_at"],
-                        ),
-                    )
-            db.execute("DELETE FROM survey_responses WHERE respondent_id = ?", (respondent.id,))
+                        (target_id, current_response["survey_id"], current_response["cipher"]),
+                    ).fetchone()
+                    if existing is None or str(current_response["updated_at"]) >= str(existing["updated_at"]):
+                        db.execute(
+                            """
+                            INSERT INTO survey_responses (
+                                respondent_id, survey_id, cipher, answers_json, created_at, updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(respondent_id, survey_id, cipher)
+                            DO UPDATE SET answers_json = excluded.answers_json, updated_at = excluded.updated_at
+                            """,
+                            (
+                                target_id,
+                                current_response["survey_id"],
+                                current_response["cipher"],
+                                current_response["answers_json"],
+                                current_response["created_at"],
+                                current_response["updated_at"],
+                            ),
+                        )
+                db.execute("DELETE FROM survey_responses WHERE respondent_id = ?", (respondent.id,))
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO oil_owners (slot_index, respondent_id, position, created_at)
+                    SELECT slot_index, ?, position, created_at
+                    FROM oil_owners
+                    WHERE respondent_id = ?
+                    """,
+                    (target_id, respondent.id),
+                )
+                db.execute("DELETE FROM oil_owners WHERE respondent_id = ?", (respondent.id,))
+                db.execute(
+                    "UPDATE oils SET brought_by_respondent_id = ? WHERE brought_by_respondent_id = ?",
+                    (target_id, respondent.id),
+                )
+                db.execute(
+                    "UPDATE oils SET submitted_by_respondent_id = ? WHERE submitted_by_respondent_id = ?",
+                    (target_id, respondent.id),
+                )
+
+            # Der aktuelle Cookie wechselt zum authentifizierten Zielkonto. Ein bisheriges
+            # Konto bleibt mit einem neuen, nicht ausgelieferten Token erhalten.
             db.execute(
-                "UPDATE oils SET brought_by_respondent_id = ? WHERE brought_by_respondent_id = ?",
-                (target_id, respondent.id),
+                "UPDATE respondents SET token = ? WHERE id = ?",
+                (f"detached-{uuid.uuid4().hex}", respondent.id),
             )
-            db.execute("DELETE FROM respondents WHERE id = ?", (respondent.id,))
+            if not current["display_name"]:
+                db.execute("DELETE FROM respondents WHERE id = ?", (respondent.id,))
 
         db.execute(
             """
@@ -1322,7 +1755,41 @@ def save_participant(handler: BaseHTTPRequestHandler, payload: dict[str, Any]) -
         is_participant=True,
         is_new_cookie=False,
     )
-    return participant_payload(updated), {"Set-Cookie": cookie_header(updated.token)}
+    body = home_state_payload(config, load_decryption(config), updated)
+    body["pin_was_set"] = pin_was_set
+    return body, {"Set-Cookie": cookie_header(updated.token)}
+
+
+def logout_participant(
+    handler: BaseHTTPRequestHandler,
+    config: dict[str, Any],
+    decryption: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    token = uuid.uuid4().hex
+    timestamp = now_iso()
+    ip = handler.client_address[0]
+    user_agent = handler.headers.get("User-Agent", "")[:500]
+    with UPDATE_LOCK, connect_db() as db:
+        cursor = db.execute(
+            """
+            INSERT INTO respondents (token, ip, user_agent, publish_name, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
+            """,
+            (token, ip, user_agent, timestamp, timestamp),
+        )
+        respondent_id = int(cursor.lastrowid)
+    anonymous = Respondent(
+        id=respondent_id,
+        token=token,
+        ip=ip,
+        user_agent=user_agent,
+        display_name=None,
+        publish_name=True,
+        publish_competitive_name=True,
+        is_participant=True,
+        is_new_cookie=False,
+    )
+    return home_state_payload(config, decryption, anonymous), {"Set-Cookie": cookie_header(token)}
 
 
 def ensure_unique_participant_name(db: sqlite3.Connection, display_name: str, exclude_id: int | None = None) -> None:
@@ -1411,6 +1878,25 @@ def update_participant_from_admin(config: dict[str, Any], decryption: dict[str, 
                 now_iso(),
                 participant_id,
             ),
+        )
+    return oil_selection_payload(config, load_decryption(config))
+
+
+def reset_participant_pin(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    participant_id = as_int(payload.get("participant_id"))
+    if participant_id is None:
+        raise ValueError("Proband fehlt.")
+    with UPDATE_LOCK, connect_db() as db:
+        row = db.execute("SELECT id FROM respondents WHERE id = ?", (participant_id,)).fetchone()
+        if row is None:
+            raise ValueError("Proband nicht gefunden.")
+        db.execute(
+            """
+            UPDATE respondents
+            SET token = ?, pin_hash = NULL, pin_reset_required = 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (f"pin-reset-{uuid.uuid4().hex}", now_iso(), participant_id),
         )
     return oil_selection_payload(config, load_decryption(config))
 
@@ -1562,9 +2048,18 @@ def network_home_url(port: int) -> str:
 
 def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decryption: dict[str, Any], respondent: Respondent) -> str:
     texts = load_texts()
-    can_open_surveys = bool(respondent.display_name)
+    mode = event_mode()
+    authenticated = bool(respondent.display_name)
+    can_open_surveys = authenticated and mode in {EVENT_MODE_EXECUTION, EVENT_MODE_EVALUATION}
+    can_submit = authenticated and mode == EVENT_MODE_PREPARATION
+    can_open_results = mode == EVENT_MODE_EVALUATION
     publish_checked = respondent.publish_name if respondent.display_name else True
     publish_competitive_checked = respondent.publish_competitive_name if respondent.display_name else True
+    mode_labels = {
+        EVENT_MODE_PREPARATION: route_text(texts, "/", "mode_preparation", "Vorbereitung"),
+        EVENT_MODE_EXECUTION: route_text(texts, "/", "mode_execution", "Durchführung"),
+        EVENT_MODE_EVALUATION: route_text(texts, "/", "mode_evaluation", "Auswertung"),
+    }
     survey_cards = []
     for survey in public_runtime_config(config, decryption)["surveys"]:
         href = f"/umfrage/{survey['id']}"
@@ -1582,18 +2077,67 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
             """
         )
 
+    submission_form = ""
+    if mode != EVENT_MODE_EVALUATION:
+        submission_form = f"""
+          <details id="new-submission" class="new-submission" {"" if can_submit else "data-disabled='true'"}>
+            <summary class="submission-toggle {"" if can_submit else "locked-link"}" aria-disabled="{"false" if can_submit else "true"}">
+              <span>{html.escape(route_text(texts, '/', 'submission_new_title', 'Etwas Neues einreichen'))}</span>
+              <small>{html.escape(route_text(texts, '/', 'submission_new_hint', 'Formular aufklappen'))}</small>
+            </summary>
+            <div class="submission-form">
+              <label>
+                {html.escape(route_text(texts, '/', 'submission_name_label', 'Name des Öls'))}
+                <input id="submission-name" type="text" maxlength="160" autocomplete="off">
+              </label>
+              <label>
+                {html.escape(route_text(texts, '/', 'submission_price_label', 'Preis pro Liter'))}
+                <input id="submission-price" type="number" min="1" step="1" inputmode="decimal">
+              </label>
+              <label class="check-option submission-olive-option">
+                <input id="submission-is-olive" type="checkbox" checked>
+                <span>{html.escape(route_text(texts, '/', 'submission_is_olive', 'Olivenöl'))}</span>
+              </label>
+              <fieldset class="submission-owners-field">
+                <legend>{html.escape(route_text(texts, '/', 'submission_owners_label', 'Von wem ist das Öl?'))}</legend>
+                <p class="metric-sub">{html.escape(route_text(texts, '/', 'submission_owners_hint', 'Du bist vorausgewählt und kannst weitere Personen ergänzen.'))}</p>
+                <div id="submission-owner-options" class="submission-owner-options"></div>
+              </fieldset>
+              <button id="submit-oil-button" class="save-button" type="button" {"" if can_submit else "disabled"}>{html.escape(route_text(texts, '/', 'submission_button', 'Öl einreichen'))}</button>
+              <p id="submission-state" class="notice" aria-live="polite"></p>
+            </div>
+          </details>
+        """
+
+    result_section = ""
+    if mode != EVENT_MODE_PREPARATION:
+        result_link_class = "primary-link result-entry-link" if can_open_results else "primary-link result-entry-link locked-link"
+        result_section = f"""
+          <section class="link-grid result-link-grid">
+            <article class="link-card result-link-card" style="--accent:#f3f5f7;--accent-contrast:#111827;--accent-hover-contrast:#111827">
+              <div>
+                <p class="eyebrow">{html.escape(route_text(texts, '/', 'results_eyebrow', 'Auswertung'))}</p>
+                <h2>{html.escape(route_text(texts, '/', 'results_title', 'Ergebnisse'))}</h2>
+              </div>
+              <a class="{result_link_class}" href="/ergebnisse" aria-disabled="{"false" if can_open_results else "true"}">{html.escape(route_text(texts, '/', 'results_open_button', 'Öffnen'))}</a>
+            </article>
+          </section>
+        """
+
     page_title = route_text(texts, "/", "page_title", "Studie des Oliven-Symposiums")
     home_subtitle = route_text(texts, "/", "subtitle", "")
     home_subtitle_html = f'<p class="topbar-subtitle">{html.escape(home_subtitle)}</p>' if home_subtitle else ""
+    initial_state = home_state_payload(config, decryption, respondent)
     return page_shell(
         page_title,
         f"""
-        <main id="home-app" class="page">
+        <main id="home-app" class="page" data-event-mode="{html.escape(mode)}">
           <section class="topbar">
             <div>
               <h1>{html.escape(route_text(texts, '/', 'heading', page_title))}</h1>
               {home_subtitle_html}
             </div>
+            <span id="event-mode-badge" class="event-mode-badge mode-{html.escape(mode)}">{html.escape(mode_labels[mode])}</span>
           </section>
 
           <section class="setup-editor participant-panel">
@@ -1612,7 +2156,7 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
                 </div>
               </div>
             </div>
-            <div class="participant-form">
+            <form id="participant-form" class="participant-form">
               <label class="participant-name-field">
                 <input
                   id="participant-name"
@@ -1623,6 +2167,18 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
                   placeholder="{html.escape(route_text(texts, '/', 'participant_name_placeholder', 'Name eingeben'))}"
                 >
               </label>
+              <label class="participant-pin-field">
+                <span>{html.escape(route_text(texts, '/', 'participant_pin_label', '4-stellige PIN'))}</span>
+                <input
+                  id="participant-pin"
+                  type="password"
+                  inputmode="numeric"
+                  pattern="[0-9]{{4}}"
+                  maxlength="4"
+                  autocomplete="current-password"
+                  placeholder="••••"
+                >
+              </label>
               <label class="check-option publish-option">
                 <input id="participant-publish" type="checkbox" {"checked" if publish_checked else ""}>
                 <span>{html.escape(route_text(texts, '/', 'publish_label', 'Name bei Freitextbewertungen veröffentlichen'))}</span>
@@ -1631,30 +2187,38 @@ def render_home(handler: BaseHTTPRequestHandler, config: dict[str, Any], decrypt
                 <input id="participant-publish-competitive" type="checkbox" {"checked" if publish_competitive_checked else ""}>
                 <span>{html.escape(route_text(texts, '/', 'publish_competitive_label', 'beim Symposium-Minispiel mitmachen'))}</span>
               </label>
-            </div>
+              <div class="participant-actions">
+                <button id="participant-login" class="save-button" type="submit">{html.escape(route_text(texts, '/', 'participant_login_button', 'Anmelden'))}</button>
+                <button id="participant-logout" class="ghost-button" type="button" {"" if authenticated else "hidden"}>{html.escape(route_text(texts, '/', 'participant_logout_button', 'Abmelden'))}</button>
+              </div>
+            </form>
             <p class="notice" id="participant-state"> </p>
           </section>
 
-          <section class="link-grid result-link-grid">
-            <article class="link-card result-link-card" style="--accent:#f3f5f7;--accent-contrast:#111827;--accent-hover-contrast:#111827">
+          <section id="submissions-card" class="setup-editor submissions-card">
+            <div class="submissions-heading">
               <div>
-                <p class="eyebrow">{html.escape(route_text(texts, '/', 'results_eyebrow', 'Live-Auswertung'))}</p>
-                <h2>{html.escape(route_text(texts, '/', 'results_title', 'Ergebnisse'))}</h2>
+                <p class="eyebrow">{html.escape(route_text(texts, '/', 'submissions_eyebrow', 'Deine Auswahl'))}</p>
+                <h2>{html.escape(route_text(texts, '/', 'submissions_title', 'Einreichungen'))}</h2>
               </div>
-              <a class="primary-link" href="/ergebnisse">{html.escape(route_text(texts, '/', 'results_open_button', 'Öffnen'))}</a>
-            </article>
+              <span id="submission-count" class="submission-count">0</span>
+            </div>
+            <div id="own-submissions" class="own-submissions" aria-live="polite"></div>
+            {submission_form}
           </section>
 
           <section class="link-grid survey-link-grid">
             {''.join(survey_cards)}
           </section>
 
+          {result_section}
+
           <section class="admin-link-section">
             <a class="ghost-button" href="/oel-auswahl">{html.escape(route_text(texts, '/', 'admin_link', 'Öl-Auswahl'))}</a>
           </section>
         </main>
         """,
-        '<script src="/static/home.js" defer></script>',
+        f'{inline_json_script("HOME_STATE", initial_state)}<script src="/static/home.js" defer></script>',
     )
 
 
@@ -1787,7 +2351,10 @@ def upsert_response(
     respondent: Respondent,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    if event_is_finished():
+    mode = event_mode()
+    if mode != EVENT_MODE_EXECUTION:
+        if mode == EVENT_MODE_PREPARATION:
+            raise ValueError("Die Umfragen sind während der Vorbereitung noch gesperrt.")
         raise ValueError("Die Umfrage ist beendet. Angaben können nur noch eingesehen werden.")
     if not respondent.display_name:
         raise ValueError("Bitte zuerst einen Namen auf der Startseite speichern.")
@@ -2167,12 +2734,15 @@ def competitive_payload(
     comment_length_ranks = rank_map(comment_length_values, reverse=True)
     oil_group_costs: dict[str, float] = {}
     for oil in oils:
-        owner_id = oil.get("brought_by_respondent_id")
+        owner_ids = [str(owner_id) for owner_id in oil.get("owner_ids", [])]
+        if not owner_ids and oil.get("brought_by_respondent_id") is not None:
+            owner_ids = [str(oil["brought_by_respondent_id"])]
         price = as_float(oil.get("actual_price_per_liter_eur"))
-        if owner_id is None or price is None:
+        if not owner_ids or price is None:
             continue
-        participant_id = str(owner_id)
-        oil_group_costs[participant_id] = oil_group_costs.get(participant_id, 0.0) + price * 0.035
+        shared_cost = price * 0.035 / len(owner_ids)
+        for participant_id in owner_ids:
+            oil_group_costs[participant_id] = oil_group_costs.get(participant_id, 0.0) + shared_cost
     oil_group_cost_ranks = rank_map(oil_group_costs, reverse=True)
 
     host_id = next(
@@ -2240,6 +2810,7 @@ def competitive_payload(
                 "name": oil["name"],
                 "brought_by_name": oil.get("brought_by_name", ""),
                 "brought_by_respondent_id": oil.get("brought_by_respondent_id"),
+                "owners": oil.get("owners", []),
                 "points": sorted(points, key=lambda item: item["name"]),
             }
         )
@@ -2712,26 +3283,32 @@ def result_payload(
         for oil_id in oil_order
     }
     accuracy_ranks = rank_map(accuracy_values, reverse=True)
-    oil_owner_ids = {
-        oil["id"]: str(oil["brought_by_respondent_id"])
-        for oil in oils
-        if oil.get("brought_by_respondent_id") is not None
-    }
+    oil_owner_ids: dict[str, list[str]] = {}
+    for oil in oils:
+        owner_ids = [str(owner_id) for owner_id in oil.get("owner_ids", [])]
+        if not owner_ids and oil.get("brought_by_respondent_id") is not None:
+            owner_ids = [str(oil["brought_by_respondent_id"])]
+        if owner_ids:
+            oil_owner_ids[oil["id"]] = owner_ids
     owner_oil_values: dict[str, list[float]] = {}
-    for oil_id, owner_id in oil_owner_ids.items():
+    for oil_id, owner_ids in oil_owner_ids.items():
         oil_average = average(oil_stats.get(oil_id, {}).get("overall", []))
         if oil_average is not None:
-            owner_oil_values.setdefault(owner_id, []).append(oil_average)
+            for owner_id in owner_ids:
+                owner_oil_values.setdefault(owner_id, []).append(oil_average)
 
     neutral_comparisons: dict[str, dict[str, list[float]]] = {}
     for observation in overall_observations:
-        owner_id = oil_owner_ids.get(observation["oil_id"])
+        owner_ids = oil_owner_ids.get(observation["oil_id"], [])
         participant_id = observation["participant_id"]
-        if owner_id is None or owner_id in hidden_competitive_ids or participant_id in hidden_competitive_ids:
+        if not owner_ids or participant_id in hidden_competitive_ids:
             continue
-        comparison = neutral_comparisons.setdefault(owner_id, {"own_values": [], "peer_values": []})
-        target = "own_values" if participant_id == owner_id else "peer_values"
-        comparison[target].append(float(observation["value"]))
+        for owner_id in owner_ids:
+            if owner_id in hidden_competitive_ids:
+                continue
+            comparison = neutral_comparisons.setdefault(owner_id, {"own_values": [], "peer_values": []})
+            target = "own_values" if participant_id == owner_id else "peer_values"
+            comparison[target].append(float(observation["value"]))
 
     overall_by_survey_values: dict[str, dict[str, float | None]] = {}
     overall_by_survey_ranks: dict[str, dict[str, int | None]] = {}
@@ -2925,6 +3502,9 @@ def result_payload(
                 "baseline": bool(oil.get("baseline")),
                 "brought_by_respondent_id": oil.get("brought_by_respondent_id"),
                 "brought_by_name": oil.get("brought_by_name", ""),
+                "brought_by_names": oil.get("brought_by_names", []),
+                "owner_ids": oil.get("owner_ids", []),
+                "owners": oil.get("owners", []),
                 "ciphers": oil.get("ciphers", {}),
                 "response_count": stat["response_count"],
                 "overall": {
@@ -3077,7 +3657,7 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             decryption = load_decryption(config)
             respondent = get_or_create_respondent(self)
             headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
-            if not respondent.display_name:
+            if not respondent.display_name or event_mode() == EVENT_MODE_PREPARATION:
                 send_html(self, 200, render_home(self, config, decryption, respondent), headers)
                 return
             survey_id = path.rsplit("/", 1)[-1]
@@ -3085,18 +3665,22 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/ergebnisse":
+            require_event_mode(EVENT_MODE_EVALUATION, "Ergebnisse sind erst in der Auswertung verfügbar.")
             send_html(self, 200, render_results_page(config))
             return
 
         if path == "/einzelne-oel-wertungen":
+            require_event_mode(EVENT_MODE_EVALUATION, "Ergebnisse sind erst in der Auswertung verfügbar.")
             send_html(self, 200, render_results_page(config, "oils"))
             return
 
         if path == "/kompetitive-verkostung":
+            require_event_mode(EVENT_MODE_EVALUATION, "Ergebnisse sind erst in der Auswertung verfügbar.")
             send_html(self, 200, render_results_page(config, "competitive"))
             return
 
         if path == "/individuelle-ergebnisse":
+            require_event_mode(EVENT_MODE_EVALUATION, "Ergebnisse sind erst in der Auswertung verfügbar.")
             send_html(self, 200, render_results_page(config, "personal"))
             return
 
@@ -3109,13 +3693,18 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             respondent = get_or_create_respondent(self)
             survey_id = query.get("survey_id", [""])[0]
             headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
+            if not respondent.display_name:
+                raise ValueError("Bitte zuerst mit Name und PIN anmelden.")
+            if event_mode() == EVENT_MODE_PREPARATION:
+                raise ValueError("Die Umfragen sind während der Vorbereitung noch gesperrt.")
             send_json(self, 200, bootstrap_payload(config, decryption, respondent, survey_id), headers)
             return
 
         if path == "/api/participant":
+            decryption = load_decryption(config)
             respondent = get_or_create_respondent(self)
             headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
-            send_json(self, 200, participant_payload(respondent), headers)
+            send_json(self, 200, home_state_payload(config, decryption, respondent), headers)
             return
 
         if path == "/api/results":
@@ -3123,11 +3712,7 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             include_competitive = access_scope == "competitive"
             personal_only = access_scope == "personal"
             viewer = get_or_create_respondent(self)
-            if not event_is_finished():
-                if include_competitive:
-                    require_competitive_results_password(query.get("password", [""])[0])
-                else:
-                    require_results_password(query.get("password", [""])[0])
+            require_event_mode(EVENT_MODE_EVALUATION, "Ergebnisse sind erst in der Auswertung verfügbar.")
             decryption = load_decryption(config)
             result = result_payload(
                 config,
@@ -3165,6 +3750,16 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_json(self, 200, upsert_response(config, decryption, respondent, payload), headers)
             return
 
+        if path == "/api/submissions":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            decryption = load_decryption(config)
+            respondent = get_or_create_respondent(self)
+            headers = {"Set-Cookie": cookie_header(respondent.token)} if respondent.is_new_cookie else None
+            send_json(self, 200, submit_oil_from_home(config, decryption, respondent, payload), headers)
+            return
+
         if path == "/api/oils/add":
             payload = read_json_body(self)
             if not isinstance(payload, dict):
@@ -3192,6 +3787,14 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             send_json(self, 200, update_participant_from_admin(config, decryption, payload))
             return
 
+        if path == "/api/oils/participants/reset-pin":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            send_json(self, 200, reset_participant_pin(config, payload))
+            return
+
         if path == "/api/oils/participants/delete":
             payload = read_json_body(self)
             if not isinstance(payload, dict):
@@ -3199,6 +3802,16 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             require_oil_password(payload.get("password"))
             decryption = load_decryption(config)
             send_json(self, 200, delete_participant_from_admin(config, decryption, payload))
+            return
+
+        if path == "/api/oils/event-mode":
+            payload = read_json_body(self)
+            if not isinstance(payload, dict):
+                raise ValueError("Payload fehlt.")
+            require_oil_password(payload.get("password"))
+            set_event_mode(str(payload.get("mode", "")))
+            decryption = load_decryption(config)
+            send_json(self, 200, oil_selection_payload(config, decryption))
             return
 
         if path == "/api/oils/event-finished":
@@ -3261,7 +3874,15 @@ class OilSurveyHandler(BaseHTTPRequestHandler):
             payload = read_json_body(self)
             if not isinstance(payload, dict):
                 raise ValueError("Payload fehlt.")
-            body, headers = save_participant(self, payload)
+            decryption = load_decryption(config)
+            body, headers = save_participant(self, config, decryption, payload)
+            send_json(self, 200, body, headers)
+            return
+
+
+        if path == "/api/participant/logout":
+            decryption = load_decryption(config)
+            body, headers = logout_participant(self, config, decryption)
             send_json(self, 200, body, headers)
             return
 

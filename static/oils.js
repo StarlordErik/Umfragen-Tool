@@ -67,20 +67,34 @@ function displayCipher(cipher, cipherSet = "") {
   return cipher || "-";
 }
 
-function participantOptions(selectedId = "") {
-  const selected = String(selectedId || "");
+function participantOptions(selectedIds = []) {
+  const selected = new Set((Array.isArray(selectedIds) ? selectedIds : [selectedIds]).map((value) => String(value)));
   const participants = state.payload?.participants || [];
-  return [
-    `<option value="">${escapeHtml(routeText("owner_empty", "nicht zugeordnet"))}</option>`,
-    ...participants.map((participant) => {
+  return participants
+    .map((participant) => {
       const value = String(participant.id);
-      return `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(participant.display_name)}</option>`;
-    }),
-  ].join("");
+      return `<option value="${escapeHtml(value)}" ${selected.has(value) ? "selected" : ""}>${escapeHtml(participant.display_name)}</option>`;
+    })
+    .join("");
 }
 
 function ownerName(value) {
   return value || routeText("owner_empty", "nicht zugeordnet");
+}
+
+function selectedParticipantIds(select) {
+  return [...(select?.selectedOptions || [])]
+    .map((option) => Number(option.value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+function eventModeNotice(mode) {
+  const notices = {
+    preparation: routeText("event_preparation_notice", "Anmeldung und Öl-Einreichung sind geöffnet; Umfragen und Ergebnisse sind gesperrt."),
+    execution: routeText("event_execution_notice", "Die Umfragen laufen; neue Öle und Ergebnisse sind gesperrt."),
+    evaluation: routeText("event_evaluation_notice", "Die Umfragen sind schreibgeschützt und alle Ergebnisse freigegeben."),
+  };
+  return notices[mode] || "";
 }
 
 function renderLogin(error = "") {
@@ -225,10 +239,17 @@ function renderOils(message = "") {
       <a class="ghost-button" href="/">${escapeHtml(globalText("home_button", "zurück zur Startseite"))}</a>
     </section>
 
-    <section class="setup-editor event-state-panel ${payload.event_finished ? "finished" : ""}">
+    <section class="setup-editor event-state-panel mode-${escapeHtml(payload.event_mode || "preparation")}">
       <div><h2>${escapeHtml(routeText("event_state_heading", "Umfrage-Status"))}</h2>
-        <p class="notice">${escapeHtml(payload.event_finished ? routeText("event_finished_notice", "Die Umfrage ist beendet. Ergebnisse sind ohne Passwort sichtbar.") : routeText("event_open_notice", "Die Umfrage läuft. Angaben können noch geändert werden."))}</p></div>
-      <label class="check-option"><input type="checkbox" data-action="toggle-event-finished" ${payload.event_finished ? "checked" : ""}><span>${escapeHtml(routeText("event_finished_label", "Umfrage beendet"))}</span></label>
+        <p class="notice">${escapeHtml(eventModeNotice(payload.event_mode))}</p></div>
+      <label class="event-mode-field">
+        <span>${escapeHtml(routeText("event_mode_label", "Phase"))}</span>
+        <select data-action="change-event-mode">
+          <option value="preparation" ${payload.event_mode === "preparation" ? "selected" : ""}>${escapeHtml(routeText("event_mode_preparation", "Vorbereitung"))}</option>
+          <option value="execution" ${payload.event_mode === "execution" ? "selected" : ""}>${escapeHtml(routeText("event_mode_execution", "Durchführung"))}</option>
+          <option value="evaluation" ${payload.event_mode === "evaluation" ? "selected" : ""}>${escapeHtml(routeText("event_mode_evaluation", "Auswertung"))}</option>
+        </select>
+      </label>
     </section>
 
     <div class="configuration-split">
@@ -244,7 +265,7 @@ function renderOils(message = "") {
           <div class="oil-form">
             <label>${escapeHtml(routeText("name_label", "Name"))}<input id="new-oil-name" type="text" maxlength="160" placeholder="${escapeHtml(routeText("name_placeholder", "Name des Öls"))}" ${canAdd ? "" : "disabled"}></label>
             <label>${escapeHtml(routeText("price_short_label", "€/l"))}<input id="new-oil-price" type="number" min="1" step="1" placeholder="${escapeHtml(routeText("price_placeholder", "€ pro Liter"))}" ${canAdd ? "" : "disabled"}></label>
-            <label>${escapeHtml(routeText("owner_short_label", "von"))}<select id="new-oil-owner" ${canAdd ? "" : "disabled"}>${participantOptions()}</select></label>
+            <label>${escapeHtml(routeText("owner_short_label", "von"))}<select id="new-oil-owner" multiple size="4" ${canAdd ? "" : "disabled"}>${participantOptions()}</select></label>
             <label class="check-option oil-row-olive-option"><input id="new-oil-olive-yes" type="checkbox" ${canAdd ? "checked" : "disabled"}><span>${escapeHtml(routeText("is_olive_label", "Olivenöl"))}</span></label>
             <button class="save-button" type="button" data-action="add-oil" ${canAdd ? "" : "disabled"}>${escapeHtml(routeText("add_button", "Hinzufügen"))}</button>
           </div>
@@ -381,7 +402,8 @@ function renderParticipantRow(participant) {
       <label class="check-option participant-publish-option"><input type="checkbox" data-participant-field="publish-competitive" ${participant.publish_competitive_name ? "checked" : ""}><span>${escapeHtml(routeText("participant_publish_competitive_label", "beim Symposium-Minispiel mitmachen"))}</span></label>
       <label class="check-option participant-publish-option"><input type="checkbox" data-participant-field="active" ${participant.is_participant ? "checked" : ""}><span>${escapeHtml(routeText("participant_active_label", "Teilnehmer"))}</span></label>
       <span class="participant-rating-count">${escapeHtml(participant.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</span>
-      <div class="config-item-actions"><button class="save-button" type="button" data-action="update-participant" data-participant-id="${escapeHtml(participant.id)}">${escapeHtml(routeText("save_button", "Speichern"))}</button><button class="ghost-button danger-button" type="button" data-action="delete-participant" data-participant-id="${escapeHtml(participant.id)}">${escapeHtml(routeText("participant_delete_button", "Löschen"))}</button></div>
+      <span class="participant-pin-status">${escapeHtml(routeText(`participant_pin_status_${participant.pin_status}`, participant.pin_status === "file" ? "PIN aus Datei" : participant.pin_status === "set" ? "PIN gesetzt" : "PIN beim nächsten Login festlegen"))}</span>
+      <div class="config-item-actions"><button class="save-button" type="button" data-action="update-participant" data-participant-id="${escapeHtml(participant.id)}">${escapeHtml(routeText("save_button", "Speichern"))}</button><button class="ghost-button" type="button" data-action="reset-participant-pin" data-participant-id="${escapeHtml(participant.id)}">${escapeHtml(routeText("participant_reset_pin_button", "PIN zurücksetzen"))}</button><button class="ghost-button danger-button" type="button" data-action="delete-participant" data-participant-id="${escapeHtml(participant.id)}">${escapeHtml(routeText("participant_delete_button", "Löschen"))}</button></div>
       </div>
     </article>`;
 }
@@ -395,10 +417,10 @@ function renderOilRow(oil) {
         <div class="oil-edit-grid">
           <label>${escapeHtml(routeText("name_label", "Name"))}<input type="text" maxlength="160" value="${escapeHtml(oil.name)}" data-edit-field="name" data-oil-id="${escapeHtml(oil.id)}"></label>
           <label>${escapeHtml(routeText("price_short_label", "€/l"))}<input type="number" min="1" step="1" value="${escapeHtml(oil.actual_price_per_liter_eur ?? "")}" data-edit-field="price" data-oil-id="${escapeHtml(oil.id)}"></label>
-          <label>${escapeHtml(routeText("owner_short_label", "von"))}<select data-edit-field="owner" data-oil-id="${escapeHtml(oil.id)}">${participantOptions(oil.brought_by_respondent_id)}</select></label>
+          <label>${escapeHtml(routeText("owner_short_label", "von"))}<select multiple size="4" data-edit-field="owner" data-oil-id="${escapeHtml(oil.id)}">${participantOptions(oil.owner_ids || [])}</select></label>
           <label class="check-option oil-row-olive-option"><input type="checkbox" data-edit-field="olive" ${oil.is_olive_oil ? "checked" : ""}><span>${escapeHtml(routeText("is_olive_label", "Olivenöl"))}</span></label>
         </div>
-        <p class="metric-sub">${escapeHtml(oil.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</p>
+        <p class="metric-sub">${escapeHtml(ownerName(oil.brought_by_name))} · ${escapeHtml(oil.response_count)} ${escapeHtml(routeText("ratings_suffix", "Wertungen"))}</p>
         <div class="cipher-mini-row"><span>${escapeHtml(routeText("taste_cipher", "Geschmack"))}: ${escapeHtml(displayCipher(oil.ciphers.geschmack, "greek"))}</span><span>${escapeHtml(routeText("smell_cipher", "Geruch"))}: ${escapeHtml(displayCipher(oil.ciphers.geruch, "latin"))}</span><span>${escapeHtml(routeText("experience_cipher", "volle Erfahrung"))}: ${escapeHtml(displayCipher(oil.ciphers.gesamt, "number"))}</span></div>
       <div class="oil-admin-actions"><button class="save-button" type="button" data-action="update-oil" data-oil-id="${escapeHtml(oil.id)}">${escapeHtml(routeText("save_button", "Speichern"))}</button><button class="ghost-button danger-button" type="button" data-action="remove-oil" data-oil-id="${escapeHtml(oil.id)}" ${oil.can_remove ? "" : "disabled"}>${escapeHtml(routeText("remove_button", "Entfernen"))}</button></div>
       </div>
@@ -459,10 +481,10 @@ async function handleClick(event) {
   if (action === "add-oil") {
     const name = document.getElementById("new-oil-name")?.value.trim() || "";
     const price = document.getElementById("new-oil-price")?.value || "";
-    const owner = document.getElementById("new-oil-owner")?.value || "";
+    const ownerIds = selectedParticipantIds(document.getElementById("new-oil-owner"));
     const isOliveOil = Boolean(document.getElementById("new-oil-olive-yes")?.checked);
     try {
-      await postAction("/api/oils/add", { name, actual_price_per_liter_eur: price, is_olive_oil: isOliveOil, brought_by_respondent_id: owner });
+      await postAction("/api/oils/add", { name, actual_price_per_liter_eur: price, is_olive_oil: isOliveOil, owner_ids: ownerIds });
       renderOils(routeText("oil_added", "Öl hinzugefügt."));
     } catch (error) {
       renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
@@ -503,15 +525,21 @@ async function handleClick(event) {
     await postAction("/api/oils/participants/delete", { participant_id: participantId });
   }
 
+  if (action === "reset-participant-pin") {
+    const participantId = target.dataset.participantId;
+    if (!confirm(routeText("confirm_reset_pin", "PIN dieses Probanden zurücksetzen? Beim nächsten Login wird eine neue PIN festgelegt."))) return;
+    await postAction("/api/oils/participants/reset-pin", { participant_id: participantId });
+  }
+
   if (action === "update-oil") {
     const oilId = target.dataset.oilId;
     const row = target.closest(".oil-admin-row");
     const name = row?.querySelector('[data-edit-field="name"]')?.value.trim() || "";
     const price = row?.querySelector('[data-edit-field="price"]')?.value || "";
-    const owner = row?.querySelector('[data-edit-field="owner"]')?.value || "";
+    const ownerIds = selectedParticipantIds(row?.querySelector('[data-edit-field="owner"]'));
     const isOliveOil = Boolean(row?.querySelector('[data-edit-field="olive"]')?.checked);
     try {
-      await postAction("/api/oils/update", { oil_id: oilId, name, actual_price_per_liter_eur: price, brought_by_respondent_id: owner, is_olive_oil: isOliveOil });
+      await postAction("/api/oils/update", { oil_id: oilId, name, actual_price_per_liter_eur: price, owner_ids: ownerIds, is_olive_oil: isOliveOil });
       renderOils(routeText("oil_saved", "Öl gespeichert."));
     } catch (error) {
       renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
@@ -549,17 +577,6 @@ async function handleClick(event) {
     await postAction("/api/oils/reset-db", {});
   }
 
-  if (action === "toggle-event-finished") {
-    const finished = Boolean(target.checked);
-    const prompt = finished
-      ? routeText("confirm_finish", "Umfrage wirklich beenden und alle Angaben sperren?")
-      : routeText("confirm_reopen", "Umfrage wieder zur Bearbeitung öffnen?");
-    if (!confirm(prompt)) {
-      target.checked = !finished;
-      return;
-    }
-    await postAction("/api/oils/event-finished", { finished });
-  }
 }
 
 app.addEventListener("click", (event) => {
@@ -570,6 +587,20 @@ app.addEventListener("click", (event) => {
 });
 
 app.addEventListener("change", (event) => {
+  const modeSelect = event.target.closest('select[data-action="change-event-mode"]');
+  if (modeSelect) {
+    const previous = state.payload.event_mode;
+    const next = modeSelect.value;
+    const prompt = routeText("confirm_mode_change", "Veranstaltungsphase wirklich ändern?");
+    if (!confirm(prompt)) {
+      modeSelect.value = previous;
+      return;
+    }
+    postAction("/api/oils/event-mode", { mode: next }).catch((error) => {
+      renderOils(`${globalText("error_prefix", "Fehler")}: ${error.message}`);
+    });
+    return;
+  }
   const input = event.target.closest('input[type="checkbox"][data-oil-kind="olive"]');
   if (!input) return;
   const group = input.closest(".choice-row");
