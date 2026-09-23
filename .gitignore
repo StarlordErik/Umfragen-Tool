@@ -1,7 +1,8 @@
 __pycache__/
 *.py[cod]
 
-data/
+data/*
+!data/umfragen.sqlite3
 
 .env
 .venv/

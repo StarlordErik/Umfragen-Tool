@@ -20,6 +20,8 @@ Wichtige Seiten:
 
 Antworten, Probanden, Öle und deren Chiffre-Zuordnungen liegen lokal in `data/umfragen.sqlite3`. Die Anmeldung mit Namen ist immer durch eine vierstellige PIN geschützt. Existiert für den Namen bereits eine PIN in `Oliven-Symposium-Momentaufnahme-PINs.txt`, wird diese beim ersten Login übernommen; andernfalls legt der Proband seine PIN selbst fest. In der Konfiguration kann die PIN eines einzelnen Probanden zurückgesetzt werden. Öle können mehreren Besitzern zugeordnet und in der Vorbereitungsphase direkt auf der Startseite eingereicht werden.
 
+Die Datenbankdatei `data/umfragen.sqlite3` wird mit Git versioniert. Änderungen an den Umfragedaten müssen als Änderungen dieser Datei committet werden. Server-Logs und temporäre SQLite-Dateien in `data/` bleiben von Git ausgeschlossen.
+
 `decryption.json` enthält nur noch die verfügbaren Chiffre-Sätze. Aktive Öle und freie Platzhalter sind normale Datenbankeinträge.
 
 ## Phasen
