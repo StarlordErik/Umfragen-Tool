@@ -1,0 +1,8 @@
+node_modules
+.next
+.artifacts
+src/projects/olive-symposium/legacy
+test-results
+playwright-report
+package-lock.json
+next-env.d.ts

@@ -1,0 +1,36 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  compatibility:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: npm ci
+      - run: npx playwright install chromium
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run test:python
+      # Original source is the visual oracle, rendered on this very same machine.
+      # Checked-in screenshots are also retained for local review on Windows.
+      - run: npm run test:reference -- --update-snapshots
+      - run: npm run build
+      - run: npm run test:runtime
+      - run: npm run test:e2e
+        env:
+          E2E_PRODUCTION: '1'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: regression-results
+          path: test-results/

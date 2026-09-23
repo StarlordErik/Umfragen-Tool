@@ -7,3 +7,14 @@ data/*
 .env
 .venv/
 venv/
+
+node_modules/
+.next/
+out/
+.artifacts/
+test-results/
+playwright-report/
+coverage/
+*.tsbuildinfo
+.env.*
+!.env.example

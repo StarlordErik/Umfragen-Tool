@@ -1,0 +1,5 @@
+{
+  "commit": "37e8599280f8f911dffe557049859766afd37e9f",
+  "databaseSha256": "80770e69b5cc3783c92d026914afe705ccd35ef4cd85c317282593f17e04409f",
+  "note": "Unmodified pre-migration source. Tests export only code/assets; never private data or PINs."
+}
