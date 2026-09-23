@@ -13,7 +13,9 @@ Werte werden als gebundene Parameter übergeben. Der CLI-Aufruf verlangt bekannt
 Projekte; Dateipfade aus Anfragen werden nicht akzeptiert. Tests initialisieren
 zwei getrennte Projektdateien und prüfen ihre Isolation.
 
-`node:sqlite` ist an Node 24 gebunden und in dessen API als experimentell markiert.
+`node:sqlite` hat in Node 24 seit 24.15 den Status „Release candidate“, davor
+„Experimental“ ([Node-24-Dokumentation](https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html)).
+Die Anwendung ist auf Node 24 LTS festgelegt.
 Der kleine Adapter kann durch einen anderen Treiber oder Drizzle ersetzt werden,
 ohne Fachmodelle oder Legacy-Daten zu ändern. Oliven verwendet im Livebetrieb
 weiterhin Pythons SQLite-Treiber. ESLint bleibt auf der mit den aktuellen

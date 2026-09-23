@@ -16,7 +16,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: 'node scripts/server.mjs',
+      command: 'node scripts/server.ts',
       url: 'http://127.0.0.1:8130',
       reuseExistingServer: false,
       timeout: 120_000,

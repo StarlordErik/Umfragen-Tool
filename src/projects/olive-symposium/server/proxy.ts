@@ -1,5 +1,5 @@
 import 'server-only';
-import { legacyOrigin } from '@/shared/config/server';
+import { legacyOrigin } from './config';
 import { mountDocument, mountScript, OLIVE_BASE } from './mount';
 
 const pages = new Set([

@@ -7,20 +7,22 @@
     "node": ">=24.11 <25"
   },
   "scripts": {
-    "dev": "python main.py --no-browser",
+    "dev": "node scripts/server.ts",
     "build": "next build",
-    "start": "python main.py --production --no-browser",
+    "start": "node scripts/server.ts --production",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "format:check": "prettier --check src scripts *.ts *.json *.mjs docs README.md tests/e2e",
+    "format:check": "prettier --check src scripts *.ts *.json *.mjs docs README.md tests/e2e tests/runtime",
     "test": "vitest run",
     "test:python": "python -m unittest discover -s tests -v",
     "test:e2e": "playwright test",
     "test:reference": "playwright test --config playwright.reference.config.ts",
-    "test:runtime": "python tests/support/check_launcher.py",
+    "test:runtime": "node --test --test-concurrency=1 tests/runtime/*.test.ts && python tests/support/check_launcher.py",
+    "test:platform": "node --test --test-concurrency=1 tests/runtime/*.test.ts",
     "db": "node --conditions=react-server scripts/database.ts"
   },
   "dependencies": {
+    "@next/env": "16.3.6",
     "next": "16.3.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",

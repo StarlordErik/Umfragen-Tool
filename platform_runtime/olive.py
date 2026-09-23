@@ -26,6 +26,17 @@ def load_legacy():
 
 def handler_for(app):
     class MountedOliveHandler(app.OilSurveyHandler):
+        def do_GET(self):
+            if self.path == "/__health":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", "2")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            super().do_GET()
+
         def parse_request(self):
             parsed = super().parse_request()
             if parsed:

@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadEnvFile } from 'node:process';
+import { fileURLToPath } from 'node:url';
+import nextEnv from '@next/env';
 import { z } from 'zod';
 import {
   oliveDatabase,
@@ -17,7 +17,10 @@ import {
   rollbackLast,
 } from '../src/shared/db/migrations.ts';
 
-if (existsSync('.env')) loadEnvFile('.env');
+const root = fileURLToPath(new URL('../', import.meta.url));
+process.chdir(root);
+// Match the web runtime's file precedence, especially .env.local database paths.
+nextEnv.loadEnvConfig(root, process.env.NODE_ENV !== 'production');
 const command = z
   .enum(['status', 'check', 'backup', 'migrate', 'rollback'])
   .parse(process.argv[2] ?? 'status');

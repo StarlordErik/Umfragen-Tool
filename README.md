@@ -6,40 +6,86 @@ ihrem bisherigen HTML, CSS, JavaScript, Datenformat und Auswertungsverhalten.
 
 ## Lokal starten – auch mit dem grünen JetBrains-Pfeil
 
-Voraussetzungen: **Node.js 24 LTS** (ab 24.11), **Python 3.12+**, Git.
-Python benötigt weiterhin keine zusätzlichen Pakete.
+Voraussetzungen für die Plattform: **Node.js 24 LTS** (ab 24.11) und Git.
+Nur das Oliven-Projekt und sein Snapshot benötigen zusätzlich **Python 3.12+**
+ohne zusätzliche Pakete. Homepage, neue TypeScript-Projekte, Build und
+Plattformtests funktionieren unabhängig von Python.
 
 ```powershell
 npm.cmd ci
 # Nur bei einer neuen Installation: .env.example nach .env kopieren und
-# OLIVE_ADMIN_PASSWORD setzen. Eine vorhandene .env nicht überschreiben.
-python main.py
+# OLIVE_ADMIN_PASSWORD für Oliven setzen. Eine vorhandene .env nicht überschreiben.
+npm.cmd run dev
 ```
 
-Die vorhandene JetBrains-Konfiguration **Run 'Umfragen-Tool'** startet weiterhin
-`main.py`. Sie startet jetzt beide Laufzeiten gemeinsam und öffnet die Homepage.
-Der vorhandene `.venv`-Interpreter kann weiterverwendet werden. Node muss im PATH
-der IDE stehen. Alternativ lässt sich `dev` direkt aus `package.json` starten.
+In JetBrains weiter **Run 'Umfragen-Tool'** wählen oder den grünen Pfeil neben
+`dev` in `package.json` verwenden. Die vorhandene geteilte Run-Konfiguration in
+`.idea/runConfigurations/` startet jetzt direkt das npm-Skript mit Node.
+Der grüne Run-Pfeil öffnet wie bisher automatisch den Browser.
+Node muss als Projektinterpreter eingerichtet sein. `python main.py` bleibt als
+Kompatibilitätseinstieg für alte eigene Run-Konfigurationen erhalten: Der Befehl
+delegiert an Node und öffnet wie bisher den Browser. Für reguläre Starts ist
+Python kein Plattform-Launcher mehr.
 
-Der öffentliche Server bindet standardmäßig an **0.0.0.0**, sucht ab **8000** einen
-freien Port und gibt lokale sowie WLAN-Adresse aus. Geräte im selben WLAN öffnen
+Der öffentliche Server bindet standardmäßig an **0.0.0.0**, sucht im Development
+ab **8000** einen freien Port und gibt lokale sowie WLAN-Adressen aus. Im
+Produktionsmodus wird ein belegter Port mit einem Fehler gemeldet. Geräte im selben WLAN öffnen
 die ausgegebene IP-Adresse, beispielsweise `http://192.168.1.20:8000`. Windows muss
 Node im privaten Netzwerk zulassen. Die interne Python-Verbindung bleibt auf
-`127.0.0.1` und einem automatisch gewählten Port. Ein Watchdog erkennt auch das
-direkte Beenden des Python-Prozesses durch JetBrains und beendet den Node-Prozess.
+`127.0.0.1` und einem automatisch gewählten Port. Node besitzt diesen optionalen
+Hintergrundprozess. Eine Steuerleitung sorgt auch beim harten IDE-Stopp unter
+Windows dafür, dass kein Python-Server weiterläuft. Beim alten Python-Einstieg
+wird auch dessen Node-Kindprozess über eine Steuerleitung beendet.
 
 ```powershell
-python main.py --port 8000 --no-browser
-npm.cmd run dev
+npm.cmd run dev -- --port 8000
+npm.cmd run dev -- --open-browser
 npm.cmd run build
 npm.cmd start
-# oder:
-python main.py --production
+# Nur die Plattform, ohne Oliven/Python (alternativ in .env setzen):
+$env:OLIVE_ENABLED = 'false'
+npm.cmd run dev
+# Anschließend die lokale Umgebungsüberschreibung wieder entfernen:
+Remove-Item Env:OLIVE_ENABLED
 ```
 
 In Shells ohne PowerShell-Ausführungsbeschränkung genügt `npm` statt `npm.cmd`.
-`next dev` und `next start` allein starten die notwendige Legacy-Laufzeit nicht;
-die vorgesehenen Einstiegspunkte sind `main.py` und die npm-Skripte.
+Die vorgesehenen Einstiegspunkte sind die npm-Skripte. Ein direktes `next dev`
+oder `next start` umgeht die Prozesssteuerung und die vertrauenswürdige Client-IP-
+Übergabe für das Oliven-Projekt. Die Gründe für diesen kleinen eigenen
+Server-Einstieg stehen in [ADR 0002](docs/architecture/0002-node-runtime.md).
+
+## Konfiguration und Betriebszustand
+
+Node lädt Umgebungsdateien mit `@next/env` nach Next.js-Regeln; bereits gesetzte
+Prozessvariablen haben Vorrang. Gemeinsame lokale Einstellungen gehören in `.env`.
+Das DB-Werkzeug verwendet dieselbe Reihenfolge. Für produktionsspezifische
+`.env.production`-Dateien `NODE_ENV=production` auch beim DB-Aufruf setzen.
+Die eigenständigen Python-Kompatibilitätswerkzeuge lesen weiterhin nur `.env`.
+Konfiguration wird serverseitig mit Zod geprüft. Keine Projektkonfiguration
+wird über `NEXT_PUBLIC_*` veröffentlicht.
+
+| Variable                                 | Wirkung                                                                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HOST`, `PORT`                           | Öffentliche Bind-Adresse und Port; CLI `--host`/`--port` haben Vorrang.                                                         |
+| `OLIVE_ENABLED`                          | `true` (Standard) oder `false`; betrifft ausschließlich Oliven.                                                                 |
+| `OLIVE_ADMIN_PASSWORD`                   | Bestehendes Admin-Passwort; nur für den Oliven-Start erforderlich.                                                              |
+| `OLIVE_DATABASE_PATH`, `OLIVE_PINS_PATH` | Bestehende Projektdateien; historische `UMFRAGEN_*`-Aliase bleiben erhalten.                                                    |
+| `OLIVE_PYTHON`                           | Optionaler Interpreterpfad ohne Shell-Argumente; standardmäßig `.venv`, sonst `python` unter Windows bzw. `python3` unter Unix. |
+| `OLIVE_STARTUP_TIMEOUT_MS`               | Zeitlimit für die Startmeldung des Hintergrundprozesses, Standard 15000.                                                        |
+| `OLIVE_LEGACY_ORIGIN`                    | Nur für Tests/extern verwaltete lokale Backends; ausschließlich `http://127.0.0.1:<port>`. Normalerweise automatisch gesetzt.   |
+
+Fehlendes Python, fehlendes Admin-Passwort, eine ungültige Projektkonfiguration
+oder ein abgestürzter Oliven-Prozess blockieren die Homepage nicht. Das Projekt
+antwortet dann mit HTTP 503; die Konsole nennt einen bereinigten Fehlergrund.
+Nach dessen Behebung die Anwendung neu starten. Es gibt keine automatische
+Neustartschleife und keine automatische Ersatzdatenbank bei falschem Dateipfad.
+
+`GET /api/health` prüft die Plattform unabhängig von Projekten. Unter
+`GET /api/health/projects/olive-symposium` liefert das Projekt `ok` (200),
+`disabled` oder `unavailable` (503). Diese Abfragen erzeugen keine Teilnehmer,
+geben keine Daten/Dateipfade aus und werden nicht gecacht. Sie sind eine
+Verfügbarkeitsprüfung; die Datenintegrität prüft weiterhin `npm run db -- check`.
 
 ## Technologie und Architektur
 
@@ -58,15 +104,15 @@ src/
     olive-symposium/
       project.ts               ausschließlich öffentliche Metadaten
       server/                  HTTP- und URL-Adapter
+      runtime/                 optionaler Python-Prozess, Konfiguration, Startprotokoll
       data/                    DB-Definition und optionale SQL-Migrationen
       legacy/                  bisherige Anwendung, Texte, Fragen und Assets
   shared/
     projects/                  kleines Metadatenmodell mit Zod
     db/                        Dateiauswahl, Integrität, Backup, Migrationen
     identity/                  stabile globale ID und Teilnehmerreferenz
-    config/                    rein serverseitige Konfiguration
-platform_runtime/              gemeinsamer Start und Python-Modulgrenze
-scripts/                       öffentlicher Node-Server und DB-Werkzeuge
+platform_runtime/              Kompatibilitäts-Imports für alte Python-Werkzeuge
+scripts/                       TypeScript-Start, HTTP-Grenze und DB-Werkzeuge
 tests/                         ursprüngliche Tests, Quell-/Datenvergleich, E2E
 data/umfragen.sqlite3           unverändert übernommene Oliven-Daten
 data/projects/<projekt>.sqlite zukünftige Projektdatenbanken
@@ -74,7 +120,9 @@ data/projects/<projekt>.sqlite zukünftige Projektdatenbanken
 
 Module kommunizieren über kleine öffentliche Einstiegspunkte. Die App setzt sie
 zusammen; `shared` importiert keine Projekte. Fachlogik bleibt in ihrem Projekt.
-Servermodule werden mit `server-only` geschützt. Legacy-Seiten werden als
+Next-Servermodule werden mit `server-only` geschützt. Die separate Node-Laufzeit
+importiert keine React-/Next-Fachmodule und wird nicht in Client-Komponenten
+verwendet. Legacy-Seiten werden als
 vollständige HTML-Dokumente ausgeliefert, ohne React-Hydration oder Homepage-CSS.
 
 Bestandserhebung, Entscheidung und Konsequenzen:
@@ -170,11 +218,20 @@ npm.cmd run format:check
 npm.cmd test
 npm.cmd run test:python
 npm.cmd run test:e2e
+npm.cmd run build
+npm.cmd run test:platform
+npm.cmd run test:runtime
 ```
 
-`npm.cmd run test:runtime` prüft nach einem Build zusätzlich den gemeinsamen
-Launcher, die Erreichbarkeit über localhost und die lokale Netzwerkadresse sowie
-das Beenden beider Prozesse. Auch dieser Test nutzt ausschließlich synthetische Daten.
+`test:platform` braucht kein Python und prüft nach einem Build den Node-Start bei
+deaktiviertem/fehlerhaft konfiguriertem Oliven-Modul, fehlendem Python sowie
+fehlendem Admin-Passwort. `test:runtime` ergänzt echte Python-Unterprozesse,
+localhost/WLAN, unveränderte anonyme Identität trotz gefälschter Forwarding-Header,
+Statusabfragen ohne Datenänderung, Backend-Absturz, fehlende/beschädigte
+Datenbanken, Start-Zeitlimits bei einer gesperrten Datenbank und das Beenden
+der Prozessketten nach einem harten IDE-Stopp.
+Es prüft den direkten Node-Start in Development/Produktion sowie den alten
+Python-Einstieg. Alle Starttests verwenden ausschließlich synthetische Daten.
 
 Die vier ursprünglichen Tests sind unverändert erhalten. Weitere Tests vergleichen
 Legacy-Funktionen per Python-AST, alle Browser-Assets und Konfigurationen mit dem

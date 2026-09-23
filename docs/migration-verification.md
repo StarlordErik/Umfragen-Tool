@@ -4,7 +4,7 @@ Referenz: `37e8599280f8f911dffe557049859766afd37e9f` vor der Migration.
 Lokal geprüft unter Windows mit Node 24.19, Python 3.14 und dem durch
 Playwright 1.63 bereitgestellten Chromium.
 
-## Bestand erhalten
+## Bestand bei der ersten Migration erhalten
 
 - Die vorhandene SQLite-Datei wurde nicht verschoben oder migriert.
 - SHA-256 vor und nach der Arbeit:
@@ -20,7 +20,7 @@ Playwright 1.63 bereitgestellten Chromium.
   zeigen auf den neuen Modulort. Browser-Assets, Fragen und Texte sind identisch.
 - Die vier ursprünglichen Tests blieben unverändert erhalten.
 
-## Prüfungen
+## Prüfungen der ersten Migration
 
 | Prüfung                                        | Ergebnis                               |
 | ---------------------------------------------- | -------------------------------------- |
@@ -44,6 +44,43 @@ Navigationssperren, Schreibschutz, alle vier Ergebnisseiten, Spoiler-Schutz,
 Admin-Anmeldung und Abbruch einer Phasenänderung. Plattformtests prüfen
 Tastaturzugang, mobile Breite, Projektlink, Styles-Isolation, alte Adressen,
 private Dateipfade, fremde Ursprünge, ungültiges JSON und die Größenbegrenzung.
+
+## Zweiter Schritt: Entkopplung des Starts
+
+Der Start erfolgt nun direkt in TypeScript/Node. Python ist ein optionaler
+Unterprozess des Oliven-Projekts. Der Legacy-Kern, seine Assets, Fragen,
+Auswertungen, Cookies und bestehenden Datensätze wurden dafür nicht verändert.
+
+Die Bestandsdaten wurden zwischen den Arbeitsschritten weitergenutzt. Ihr
+SHA-256 zu Beginn und nach der Entkopplung ist identisch:
+`28fd7c03c9a94f1c8fe7388191b458a6af40c5fdaa41b4055aa2d3802f3c0d76`.
+Der frühere Datenstand wurde ausdrücklich nicht wiederhergestellt.
+Die vorhandenen lokalen Oliven-Einstellungen werden vom bisherigen Python-
+Parser und vom neuen Node-Start gleich gelesen; Zugangsdaten wurden dabei
+weder ausgegeben noch geändert.
+
+Zusätzliche Prüfungen unter Windows:
+
+- 29 Vitest-Tests für Datenbanken, Oberfläche, Proxy, Health-Endpunkt,
+  Konfiguration, Forwarding-Header und Portauswahl.
+- Vier echte Node-Starts ohne funktionierenden Python-Interpreter:
+  deaktiviertes Projekt, fehlendes Python, fehlendes Admin-Passwort,
+  ungültige Projektkonfiguration. Homepage bleibt 200, Projekt liefert 503.
+- Sieben Laufzeitfälle mit synthetischen Daten: Node in Produktion,
+  Python-Kompatibilitätseinstieg, Backend-Absturz, fehlende/beschädigte/gesperrte
+  Datenbank und Node in Development mit voreingestelltem Interpreter.
+- localhost und lokale Netzwerkadresse, anonyme Identität bei gefälschten
+  Forwarding-Headern, Health-Abfragen ohne zusätzliche Teilnehmer sowie
+  geschlossene öffentliche/private Ports nach hartem Beenden des Elternprozesses.
+- Erneut sieben Python-/Bestandsdatentests, sechs Browserläufe des unveränderten
+  Originals und zehn Browserläufe der Plattform; alle 30 Oliven-Bildvergleiche
+  mit null abweichenden Pixeln. Keine Referenzbilder wurden angepasst.
+
+Die CI enthält zusätzlich einen Linux-Job für Build und Python-unabhängige
+Plattformtests. Dieser Job ist konfiguriert; lokal wurden die Änderungen unter
+Windows geprüft. Die Run-Konfiguration wurde auf npm/Node umgestellt; ihre
+Startbefehle und Prozessbeendigung wurden automatisiert geprüft, die JetBrains-
+Oberfläche selbst wurde nicht ferngesteuert.
 
 ## Reichweite
 
